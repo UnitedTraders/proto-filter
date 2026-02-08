@@ -1,0 +1,207 @@
+package main
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func buildBinary(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	bin := filepath.Join(tmp, "proto-filter")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	return bin
+}
+
+func runBinary(t *testing.T, bin string, args ...string) (stderr string, exitCode int) {
+	t.Helper()
+	cmd := exec.Command(bin, args...)
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+	stderr = stderrBuf.String()
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return stderr, exitErr.ExitCode()
+		}
+		t.Fatalf("run: %v", err)
+	}
+	return stderr, 0
+}
+
+func testdataDir(t *testing.T, sub string) string {
+	t.Helper()
+	dir, err := filepath.Abs(filepath.Join("testdata", sub))
+	if err != nil {
+		t.Fatalf("testdata path: %v", err)
+	}
+	return dir
+}
+
+// T035: Missing input directory
+func TestMissingInputDirectory(t *testing.T) {
+	bin := buildBinary(t)
+	stderr, code := runBinary(t, bin,
+		"--input", "/nonexistent/path/to/protos",
+		"--output", t.TempDir(),
+	)
+	if code != 1 {
+		t.Errorf("expected exit code 1, got %d", code)
+	}
+	if !strings.Contains(stderr, "not found") {
+		t.Errorf("stderr should contain 'not found', got: %s", stderr)
+	}
+}
+
+// T036: Same input/output path
+func TestSameInputOutputPath(t *testing.T) {
+	bin := buildBinary(t)
+	dir := testdataDir(t, "simple")
+	stderr, code := runBinary(t, bin,
+		"--input", dir,
+		"--output", dir,
+	)
+	if code != 1 {
+		t.Errorf("expected exit code 1, got %d", code)
+	}
+	if !strings.Contains(stderr, "must be different") {
+		t.Errorf("stderr should mention 'must be different', got: %s", stderr)
+	}
+}
+
+// T037: Invalid YAML config
+func TestInvalidYAMLConfig(t *testing.T) {
+	bin := buildBinary(t)
+	tmp := t.TempDir()
+
+	// Create invalid YAML
+	badConfig := filepath.Join(tmp, "bad.yaml")
+	os.WriteFile(badConfig, []byte("include: [not closed"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "simple"),
+		"--output", filepath.Join(tmp, "out"),
+		"--config", badConfig,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2 for config error, got %d", code)
+	}
+	if !strings.Contains(stderr, "error") {
+		t.Errorf("stderr should contain 'error', got: %s", stderr)
+	}
+}
+
+// T038: Verbose output
+func TestVerboseOutput(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "simple"),
+		"--output", outDir,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "processed") {
+		t.Errorf("verbose output should contain 'processed', got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "wrote") {
+		t.Errorf("verbose output should contain 'wrote', got: %s", stderr)
+	}
+}
+
+// Test: missing required flags
+func TestMissingRequiredFlags(t *testing.T) {
+	bin := buildBinary(t)
+	stderr, code := runBinary(t, bin)
+	if code != 1 {
+		t.Errorf("expected exit code 1 for missing flags, got %d", code)
+	}
+	if !strings.Contains(stderr, "--input and --output") {
+		t.Errorf("stderr should mention required flags, got: %s", stderr)
+	}
+}
+
+// Test: zero proto files warning
+func TestZeroProtoFilesWarning(t *testing.T) {
+	bin := buildBinary(t)
+	emptyDir := t.TempDir()
+	outDir := t.TempDir()
+
+	stderr, code := runBinary(t, bin,
+		"--input", emptyDir,
+		"--output", outDir,
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0 for zero files, got %d", code)
+	}
+	if !strings.Contains(stderr, "warning") {
+		t.Errorf("stderr should contain warning, got: %s", stderr)
+	}
+}
+
+// Test: successful pass-through
+func TestSuccessfulPassThrough(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "simple"),
+		"--output", outDir,
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Verify output file exists
+	outFile := filepath.Join(outDir, "service.proto")
+	if _, err := os.Stat(outFile); err != nil {
+		t.Errorf("output file missing: %v", err)
+	}
+}
+
+// Test: successful filtering via CLI
+func TestSuccessfulFiltering(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("include:\n  - \"filter.OrderService\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "filter"),
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// orders.proto should exist
+	if _, err := os.Stat(filepath.Join(outDir, "orders.proto")); err != nil {
+		t.Error("orders.proto should be in output")
+	}
+
+	// users.proto should NOT exist
+	if _, err := os.Stat(filepath.Join(outDir, "users.proto")); err == nil {
+		t.Error("users.proto should NOT be in output")
+	}
+
+	// Verify verbose output
+	if !strings.Contains(stderr, "included") {
+		t.Errorf("verbose should report included count, got: %s", stderr)
+	}
+}

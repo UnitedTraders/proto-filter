@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package filter;
+
+message Pagination {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message Money {
+  string currency = 1;
+  int64 amount = 2;
+}
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE = 1;
+  STATUS_INACTIVE = 2;
+}

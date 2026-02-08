@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package nested.users;
+
+message User {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+}
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (User);
+}
+
+message GetUserRequest {
+  string id = 1;
+}
