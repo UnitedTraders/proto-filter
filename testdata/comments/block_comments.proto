@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package comments;
+
+/**
+ * TickerService provides real-time market data.
+ *
+ * All methods require authentication.
+ */
+service TickerService {
+  /**
+   * Returns updates of price for all symbols from symbolSpec
+   * @StartsWithSnapshot
+   * @SupportWindow
+   */
+  rpc GetPriceUpdates(PriceRequest) returns (stream PriceUpdate);
+
+  /* GetSymbols returns a list of available symbols. */
+  rpc GetSymbols(SymbolsRequest) returns (SymbolsResponse);
+}
+
+/**
+ * PriceRequest specifies which symbols to subscribe to.
+ */
+message PriceRequest {
+  /* The symbol specification pattern (e.g., "AAPL", "BTC*"). */
+  string symbol_spec = 1;
+  /**
+   * Maximum number of updates to receive.
+   * Zero means unlimited.
+   */
+  int32 max_updates = 2;
+}
+
+/* PriceUpdate contains a single price tick. */
+message PriceUpdate {
+  string symbol = 1; /* The ticker symbol */
+  double price = 2; /* Current price */
+  int64 timestamp = 3;
+}
+
+// SymbolsRequest is a request for available symbols.
+message SymbolsRequest {
+  // Optional filter pattern.
+  string filter = 1;
+}
+
+// SymbolsResponse lists available symbols.
+message SymbolsResponse {
+  repeated string symbols = 1;
+}
+
+/**
+ * TickerStatus represents the state of the ticker feed.
+ */
+enum TickerStatus {
+  TICKER_STATUS_UNSPECIFIED = 0;
+  /* Feed is active and streaming. */
+  TICKER_STATUS_ACTIVE = 1;
+  /**
+   * Feed is paused.
+   * Will resume automatically.
+   */
+  TICKER_STATUS_PAUSED = 2;
+  TICKER_STATUS_STOPPED = 3;
+}

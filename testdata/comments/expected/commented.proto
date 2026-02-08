@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package comments;
+
+// Status represents the state of an entity.
+enum Status {
+
+  // Default unspecified status.
+  STATUS_UNSPECIFIED = 0;
+
+  // Entity is active and operational.
+  STATUS_ACTIVE = 1; // Currently active
+
+  // Entity has been deactivated.
+  STATUS_INACTIVE = 2;
+}
+
+// OrderRequest is used to create a new order.
+message OrderRequest {
+
+  // The name of the order.
+  string name = 1;
+
+  // The price in USD.
+  double price = 2; // Must be positive
+
+  // Current status of the order.
+  Status status = 3;
+}
+
+// OrderResponse contains the created order details.
+message OrderResponse {
+  string id     = 1; // Unique identifier
+  string name   = 2;
+  double price  = 3;
+  Status status = 4;
+}
+
+// OrderService handles order operations.
+service OrderService {
+
+  // CreateOrder creates a new order in the system.
+  rpc CreateOrder (OrderRequest) returns (OrderResponse); // Main creation endpoint
+}

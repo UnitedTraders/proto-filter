@@ -1,0 +1,62 @@
+syntax = "proto3";
+
+package comments;
+
+// PaymentStatus tracks the lifecycle of a payment
+// from creation through settlement or failure.
+enum PaymentStatus {
+  PAYMENT_STATUS_UNSPECIFIED = 0;
+
+  // Payment has been created but not yet processed.
+  PAYMENT_STATUS_PENDING = 1;
+
+  // Payment was successfully processed
+  // and funds have been transferred.
+  PAYMENT_STATUS_SETTLED = 2;
+
+  // Payment failed due to insufficient funds or other error.
+  PAYMENT_STATUS_FAILED = 3;
+}
+
+// PaymentRequest contains all information needed
+// to initiate a new payment transaction.
+//
+// Fields:
+//   - amount: the payment amount in minor units
+//   - currency: ISO 4217 currency code
+//   - recipient: the payee identifier
+message PaymentRequest {
+
+  // Amount in minor currency units (e.g., cents).
+  int64 amount = 1;
+
+  // ISO 4217 currency code (e.g., "USD", "EUR").
+  string currency = 2;
+
+  // Identifier of the payment recipient.
+  // Can be an account ID or email address.
+  string recipient = 3;
+}
+
+// PaymentResponse is returned after initiating a payment.
+// It contains the transaction ID and current status.
+// Use the transaction_id to query for updates.
+message PaymentResponse {
+
+  // Unique transaction identifier assigned by the system.
+  // Format: UUID v4.
+  string transaction_id = 1;
+
+  // Current status of the payment.
+  PaymentStatus status = 2;
+}
+
+// PaymentService provides operations for managing payments.
+//
+// All methods require authentication via bearer token.
+service PaymentService {
+
+  // MakePayment initiates a new payment transaction.
+  // Returns immediately with a pending status.
+  rpc MakePayment (PaymentRequest) returns (PaymentResponse);
+}
