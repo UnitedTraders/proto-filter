@@ -164,6 +164,8 @@ func run() int {
 
 	// Prune and write
 	writtenCount := 0
+	methodsRemoved := 0
+	orphansRemoved := 0
 	for _, pf := range parsed {
 		if !filesToWrite[pf.rel] {
 			continue
@@ -171,6 +173,18 @@ func run() int {
 		if keepFQNs != nil {
 			filter.PruneAST(pf.def, pf.pkg, keepFQNs)
 		}
+
+		// Annotation-based method filtering
+		if cfg != nil && cfg.HasAnnotations() {
+			methodsRemoved += filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations)
+			filter.RemoveEmptyServices(pf.def)
+			orphansRemoved += filter.RemoveOrphanedDefinitions(pf.def, pf.pkg)
+
+			if !filter.HasRemainingDefinitions(pf.def) {
+				continue
+			}
+		}
+
 		outPath := filepath.Join(absOutput, pf.rel)
 		if err := writer.WriteProtoFile(pf.def, outPath); err != nil {
 			fmt.Fprintf(os.Stderr, "proto-filter: error: writing %s: %v\n", pf.rel, err)
@@ -182,6 +196,9 @@ func run() int {
 	if *verbose {
 		fmt.Fprintf(os.Stderr, "proto-filter: processed %d files, %d definitions\n", len(files), totalDefs)
 		fmt.Fprintf(os.Stderr, "proto-filter: included %d definitions, excluded %d\n", includedCount, excludedCount)
+		if cfg != nil && cfg.HasAnnotations() {
+			fmt.Fprintf(os.Stderr, "proto-filter: removed %d methods by annotation, %d orphaned definitions\n", methodsRemoved, orphansRemoved)
+		}
 		fmt.Fprintf(os.Stderr, "proto-filter: wrote %d files to %s\n", writtenCount, *outputDir)
 	}
 

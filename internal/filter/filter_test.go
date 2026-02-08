@@ -282,6 +282,386 @@ func TestIntegrationFilter(t *testing.T) {
 	}
 }
 
+// T006: Test annotation extraction from comments
+func TestExtractAnnotations(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines []string
+		want  []string
+	}{
+		{"simple annotation", []string{" @HasAnyRole"}, []string{"HasAnyRole"}},
+		{"annotation with args", []string{" @HasAnyRole({\"ADMIN\"})"}, []string{"HasAnyRole"}},
+		{"dotted annotation", []string{" @com.example.Secure"}, []string{"com.example.Secure"}},
+		{"no annotations", []string{" Creates a new order."}, nil},
+		{"mixed lines", []string{" @HasAnyRole({\"ADMIN\"})", " Creates a new order."}, []string{"HasAnyRole"}},
+		{"multiple annotations", []string{" @HasAnyRole", " @Deprecated"}, []string{"HasAnyRole", "Deprecated"}},
+		{"annotation in block comment", []string{" * @HasAnyRole({\"ADMIN\"})", " * Some description"}, []string{"HasAnyRole"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			comment := &proto.Comment{Lines: tc.lines}
+			got := ExtractAnnotations(comment)
+			if len(got) != len(tc.want) {
+				t.Fatalf("ExtractAnnotations: got %v, want %v", got, tc.want)
+			}
+			for i, g := range got {
+				if g != tc.want[i] {
+					t.Errorf("annotation[%d]: got %q, want %q", i, g, tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestExtractAnnotationsNilComment(t *testing.T) {
+	got := ExtractAnnotations(nil)
+	if len(got) != 0 {
+		t.Errorf("nil comment should return empty, got %v", got)
+	}
+}
+
+// T007: Test method filtering by annotation
+func TestFilterMethodsByAnnotation(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	if removed != 2 {
+		t.Errorf("expected 2 methods removed, got %d", removed)
+	}
+
+	// Verify remaining methods
+	var methodNames []string
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodNames = append(methodNames, r.Name)
+	}))
+
+	if len(methodNames) != 1 {
+		t.Fatalf("expected 1 remaining method, got %d: %v", len(methodNames), methodNames)
+	}
+	if methodNames[0] != "ListOrders" {
+		t.Errorf("expected ListOrders, got %s", methodNames[0])
+	}
+}
+
+func TestFilterMethodsByAnnotationNoMatch(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := FilterMethodsByAnnotation(def, []string{"NonExistent"})
+	if removed != 0 {
+		t.Errorf("expected 0 methods removed, got %d", removed)
+	}
+
+	var methodCount int
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodCount++
+	}))
+	if methodCount != 3 {
+		t.Errorf("expected 3 methods unchanged, got %d", methodCount)
+	}
+}
+
+// Test that annotated methods are kept when their annotation is not in the filter list
+func TestFilterMethodsByAnnotationKeepsNonFilteredAnnotation(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Filter for "Internal" — none of the methods have this annotation.
+	// Methods with @HasAnyRole should NOT be removed.
+	removed := FilterMethodsByAnnotation(def, []string{"Internal"})
+	if removed != 0 {
+		t.Errorf("expected 0 methods removed, got %d", removed)
+	}
+
+	var methodNames []string
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodNames = append(methodNames, r.Name)
+	}))
+
+	if len(methodNames) != 3 {
+		t.Fatalf("expected all 3 methods kept, got %d: %v", len(methodNames), methodNames)
+	}
+
+	want := map[string]bool{"CreateOrder": true, "DeleteOrder": true, "ListOrders": true}
+	for _, name := range methodNames {
+		if !want[name] {
+			t.Errorf("unexpected method %q in output", name)
+		}
+	}
+}
+
+// T008: Integration test for annotation method filtering
+func TestIntegrationAnnotationFilter(t *testing.T) {
+	inputDir := testdataDir(t, "annotations")
+	inputPath := filepath.Join(inputDir, "service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Filter methods by annotation
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+
+	// Write output and verify
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "service.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	out := string(content)
+
+	// ListOrders should remain
+	if !strings.Contains(out, "ListOrders") {
+		t.Error("output should contain ListOrders")
+	}
+	// CreateOrder and DeleteOrder RPC methods should be removed
+	if strings.Contains(out, "rpc CreateOrder") {
+		t.Error("output should NOT contain rpc CreateOrder (annotated)")
+	}
+	if strings.Contains(out, "rpc DeleteOrder") {
+		t.Error("output should NOT contain rpc DeleteOrder (annotated)")
+	}
+	// Service should still exist
+	if !strings.Contains(out, "OrderService") {
+		t.Error("output should contain OrderService (has remaining methods)")
+	}
+
+	// Verify output is parseable
+	_, err = parser.ParseProtoFile(outputPath)
+	if err != nil {
+		t.Fatalf("output not parseable: %v", err)
+	}
+}
+
+// T018: Test removing empty services
+func TestRemoveEmptyServices(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "internal_only.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Remove all methods (all annotated)
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+
+	removed := RemoveEmptyServices(def)
+	if removed != 1 {
+		t.Errorf("expected 1 empty service removed, got %d", removed)
+	}
+
+	var serviceCount int
+	proto.Walk(def, proto.WithService(func(s *proto.Service) { serviceCount++ }))
+	if serviceCount != 0 {
+		t.Errorf("expected 0 services, got %d", serviceCount)
+	}
+}
+
+func TestRemoveEmptyServicesKeepsNonEmpty(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Remove annotated methods (2 of 3)
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+
+	removed := RemoveEmptyServices(def)
+	if removed != 0 {
+		t.Errorf("expected 0 services removed (service still has methods), got %d", removed)
+	}
+
+	var serviceCount int
+	proto.Walk(def, proto.WithService(func(s *proto.Service) { serviceCount++ }))
+	if serviceCount != 1 {
+		t.Errorf("expected 1 service, got %d", serviceCount)
+	}
+}
+
+// T019: Test HasRemainingDefinitions
+func TestHasRemainingDefinitions(t *testing.T) {
+	// File with definitions
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !HasRemainingDefinitions(def) {
+		t.Error("file with definitions should return true")
+	}
+
+	// Manually remove all definitions
+	filtered := make([]proto.Visitee, 0)
+	for _, elem := range def.Elements {
+		switch elem.(type) {
+		case *proto.Service, *proto.Message, *proto.Enum:
+			continue
+		default:
+			filtered = append(filtered, elem)
+		}
+	}
+	def.Elements = filtered
+	if HasRemainingDefinitions(def) {
+		t.Error("file with no definitions should return false")
+	}
+}
+
+// T020: Integration test for empty service removal
+func TestIntegrationEmptyServiceRemoval(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "internal_only.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	RemoveEmptyServices(def)
+	RemoveOrphanedDefinitions(def, "annotations")
+
+	if HasRemainingDefinitions(def) {
+		t.Error("all definitions should be removed (service was empty, messages orphaned)")
+	}
+}
+
+// T012: Test collecting referenced types from AST
+func TestCollectReferencedTypes(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "shared.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Filter out Refund method first
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+
+	refs := CollectReferencedTypes(def, "annotations")
+
+	// GetPaymentStatus's request/response types should be referenced
+	if !refs["annotations.PaymentStatusRequest"] {
+		t.Error("PaymentStatusRequest should be referenced")
+	}
+	if !refs["annotations.PaymentStatusResponse"] {
+		t.Error("PaymentStatusResponse should be referenced")
+	}
+	// OrderStatus is referenced by PaymentStatusResponse
+	if !refs["annotations.OrderStatus"] {
+		t.Error("OrderStatus should be referenced (via PaymentStatusResponse)")
+	}
+	// Refund types should NOT be referenced (method was removed)
+	if refs["annotations.RefundRequest"] {
+		t.Error("RefundRequest should NOT be referenced (method removed)")
+	}
+	if refs["annotations.RefundResponse"] {
+		t.Error("RefundResponse should NOT be referenced (method removed)")
+	}
+}
+
+// T013: Test removing orphaned definitions
+func TestRemoveOrphanedDefinitions(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "shared.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	removed := RemoveOrphanedDefinitions(def, "annotations")
+
+	if removed != 2 {
+		t.Errorf("expected 2 orphaned definitions removed, got %d", removed)
+	}
+
+	// Check remaining definitions
+	var msgNames []string
+	var enumNames []string
+	proto.Walk(def,
+		proto.WithMessage(func(m *proto.Message) { msgNames = append(msgNames, m.Name) }),
+		proto.WithEnum(func(e *proto.Enum) { enumNames = append(enumNames, e.Name) }),
+	)
+
+	// PaymentStatusRequest, PaymentStatusResponse should remain
+	found := make(map[string]bool)
+	for _, n := range msgNames {
+		found[n] = true
+	}
+	if !found["PaymentStatusRequest"] {
+		t.Error("PaymentStatusRequest should remain (referenced by kept method)")
+	}
+	if !found["PaymentStatusResponse"] {
+		t.Error("PaymentStatusResponse should remain (referenced by kept method)")
+	}
+	if found["RefundRequest"] {
+		t.Error("RefundRequest should be removed (orphaned)")
+	}
+	if found["RefundResponse"] {
+		t.Error("RefundResponse should be removed (orphaned)")
+	}
+
+	// OrderStatus should remain (referenced by PaymentStatusResponse)
+	if len(enumNames) != 1 || enumNames[0] != "OrderStatus" {
+		t.Errorf("OrderStatus should remain, got enums: %v", enumNames)
+	}
+}
+
+// T014: Integration test for orphan removal pipeline
+func TestIntegrationOrphanRemoval(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "shared.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	RemoveOrphanedDefinitions(def, "annotations")
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "shared.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	content, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "PaymentStatusRequest") {
+		t.Error("output should contain PaymentStatusRequest")
+	}
+	if !strings.Contains(out, "OrderStatus") {
+		t.Error("output should contain OrderStatus (referenced by kept message)")
+	}
+	if strings.Contains(out, "RefundRequest") {
+		t.Error("output should NOT contain RefundRequest (orphaned)")
+	}
+	if strings.Contains(out, "RefundResponse") {
+		t.Error("output should NOT contain RefundResponse (orphaned)")
+	}
+
+	// Verify parseable
+	_, err = parser.ParseProtoFile(outputPath)
+	if err != nil {
+		t.Fatalf("output not parseable: %v", err)
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))
