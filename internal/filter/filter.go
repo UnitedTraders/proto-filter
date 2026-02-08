@@ -339,6 +339,84 @@ func RemoveOrphanedDefinitions(def *proto.Proto, pkg string) int {
 	return totalRemoved
 }
 
+// ConvertBlockComments walks the proto AST and converts all C-style
+// block comments (/* ... */) to single-line // comments. Leading
+// asterisk prefixes are stripped from each line.
+func ConvertBlockComments(def *proto.Proto) {
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Service:
+			convertComment(v.Comment)
+			for _, svcElem := range v.Elements {
+				if rpc, ok := svcElem.(*proto.RPC); ok {
+					convertComment(rpc.Comment)
+					convertComment(rpc.InlineComment)
+				}
+			}
+		case *proto.Message:
+			convertComment(v.Comment)
+			for _, mElem := range v.Elements {
+				switch f := mElem.(type) {
+				case *proto.NormalField:
+					convertComment(f.Comment)
+					convertComment(f.InlineComment)
+				case *proto.MapField:
+					convertComment(f.Comment)
+					convertComment(f.InlineComment)
+				case *proto.OneOfField:
+					convertComment(f.Comment)
+					convertComment(f.InlineComment)
+				}
+			}
+		case *proto.Enum:
+			convertComment(v.Comment)
+			for _, eElem := range v.Elements {
+				if ef, ok := eElem.(*proto.EnumField); ok {
+					convertComment(ef.Comment)
+					convertComment(ef.InlineComment)
+				}
+			}
+		}
+	}
+}
+
+// convertComment converts a single block comment to single-line style.
+// It sets Cstyle to false and strips leading asterisk prefixes from lines.
+// Nil or non-Cstyle comments are left unchanged.
+func convertComment(c *proto.Comment) {
+	if c == nil || !c.Cstyle {
+		return
+	}
+	c.Cstyle = false
+	cleaned := make([]string, 0, len(c.Lines))
+	for _, line := range c.Lines {
+		cleaned = append(cleaned, " "+cleanBlockCommentLine(line))
+	}
+	// Trim leading/trailing empty lines from block comment framing
+	for len(cleaned) > 0 && strings.TrimSpace(cleaned[0]) == "" {
+		cleaned = cleaned[1:]
+	}
+	for len(cleaned) > 0 && strings.TrimSpace(cleaned[len(cleaned)-1]) == "" {
+		cleaned = cleaned[:len(cleaned)-1]
+	}
+	c.Lines = cleaned
+}
+
+// cleanBlockCommentLine strips block comment formatting from a single line.
+func cleanBlockCommentLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if strings.HasPrefix(trimmed, "* ") {
+		return trimmed[2:]
+	}
+	if trimmed == "*" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "*") {
+		return trimmed[1:]
+	}
+	return trimmed
+}
+
 func qualifiedName(pkg, name string) string {
 	if pkg == "" {
 		return name

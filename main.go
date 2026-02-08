@@ -185,6 +185,9 @@ func run() int {
 			}
 		}
 
+		// Convert block comments to single-line style
+		filter.ConvertBlockComments(pf.def)
+
 		outPath := filepath.Join(absOutput, pf.rel)
 		if err := writer.WriteProtoFile(pf.def, outPath); err != nil {
 			fmt.Fprintf(os.Stderr, "proto-filter: error: writing %s: %v\n", pf.rel, err)

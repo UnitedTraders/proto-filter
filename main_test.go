@@ -257,6 +257,72 @@ func TestBackwardCompatibilityNoAnnotations(t *testing.T) {
 	}
 }
 
+// Test: comment conversion via CLI (pass-through mode)
+func TestCommentConversionCLI(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "comments"),
+		"--output", outDir,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Compare each output file against golden file
+	goldenDir := filepath.Join(testdataDir(t, "comments"), "expected")
+	for _, name := range []string{"commented.proto", "multiline.proto", "block_comments.proto"} {
+		actual, err := os.ReadFile(filepath.Join(outDir, name))
+		if err != nil {
+			t.Fatalf("read output %s: %v", name, err)
+		}
+		expected, err := os.ReadFile(filepath.Join(goldenDir, name))
+		if err != nil {
+			t.Fatalf("read golden %s: %v", name, err)
+		}
+		if string(actual) != string(expected) {
+			t.Errorf("%s: output does not match golden file", name)
+		}
+	}
+}
+
+// Test: comment conversion works alongside filtering
+func TestCommentConversionWithFiltering(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	// Config that includes everything (pass-through filtering)
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("include:\n  - \"comments.*\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "comments"),
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Verify block comments are converted in filtered output
+	content, err := os.ReadFile(filepath.Join(outDir, "multiline.proto"))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	out := string(content)
+
+	// Should NOT contain block comment markers
+	if strings.Contains(out, "/*") {
+		t.Error("output should not contain block comment markers after conversion")
+	}
+	// Should contain converted single-line comments
+	if !strings.Contains(out, "// PaymentStatus tracks") {
+		t.Error("output should contain converted single-line comment")
+	}
+}
+
 // Test: successful filtering via CLI
 func TestSuccessfulFiltering(t *testing.T) {
 	bin := buildBinary(t)

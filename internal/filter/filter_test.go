@@ -662,6 +662,222 @@ func TestIntegrationOrphanRemoval(t *testing.T) {
 	}
 }
 
+// T009: Golden file comparison helper
+func testGoldenFile(t *testing.T, inputName string) {
+	t.Helper()
+	inputPath := filepath.Join(testdataDir(t, "comments"), inputName+".proto")
+	goldenPath := filepath.Join(testdataDir(t, "comments"), "expected", inputName+".proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse %s: %v", inputName, err)
+	}
+
+	ConvertBlockComments(def)
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, inputName+".proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file %s\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", goldenPath, string(actual), string(expected))
+	}
+}
+
+// T010: Golden file test for multiline.proto
+func TestGoldenFileMultiline(t *testing.T) {
+	testGoldenFile(t, "multiline")
+}
+
+// T011: Golden file test for commented.proto (unchanged)
+func TestGoldenFileCommented(t *testing.T) {
+	testGoldenFile(t, "commented")
+}
+
+// T012: Golden file test for block_comments.proto
+func TestGoldenFileBlockComments(t *testing.T) {
+	testGoldenFile(t, "block_comments")
+}
+
+// T013: Test annotation preservation during conversion
+func TestConvertBlockCommentsPreservesAnnotations(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "comments"), "block_comments.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ConvertBlockComments(def)
+
+	// Find the GetPriceUpdates RPC and verify annotations are in Lines
+	var found bool
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		if r.Name == "GetPriceUpdates" && r.Comment != nil {
+			found = true
+			lines := strings.Join(r.Comment.Lines, "\n")
+			if !strings.Contains(lines, "@StartsWithSnapshot") {
+				t.Error("@StartsWithSnapshot annotation should be preserved")
+			}
+			if !strings.Contains(lines, "@SupportWindow") {
+				t.Error("@SupportWindow annotation should be preserved")
+			}
+		}
+	}))
+	if !found {
+		t.Error("GetPriceUpdates RPC not found")
+	}
+}
+
+// T014: Test empty block comment conversion
+func TestConvertBlockCommentsEmptyComment(t *testing.T) {
+	comment := &proto.Comment{
+		Cstyle: true,
+		Lines:  []string{" "},
+	}
+	convertComment(comment)
+
+	if comment.Cstyle {
+		t.Error("comment should no longer be Cstyle")
+	}
+}
+
+// T005: Test block comment conversion on AST level
+func TestConvertBlockComments(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "comments"), "multiline.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Verify there are Cstyle comments before conversion
+	hasCstyle := false
+	proto.Walk(def,
+		proto.WithService(func(s *proto.Service) {
+			if s.Comment != nil && s.Comment.Cstyle {
+				hasCstyle = true
+			}
+		}),
+		proto.WithMessage(func(m *proto.Message) {
+			if m.Comment != nil && m.Comment.Cstyle {
+				hasCstyle = true
+			}
+		}),
+		proto.WithEnum(func(e *proto.Enum) {
+			if e.Comment != nil && e.Comment.Cstyle {
+				hasCstyle = true
+			}
+		}),
+	)
+	if !hasCstyle {
+		t.Fatal("multiline.proto should have Cstyle comments before conversion")
+	}
+
+	ConvertBlockComments(def)
+
+	// Verify no Cstyle comments remain
+	proto.Walk(def,
+		proto.WithService(func(s *proto.Service) {
+			if s.Comment != nil && s.Comment.Cstyle {
+				t.Errorf("service %s still has Cstyle comment", s.Name)
+			}
+		}),
+		proto.WithMessage(func(m *proto.Message) {
+			if m.Comment != nil && m.Comment.Cstyle {
+				t.Errorf("message %s still has Cstyle comment", m.Name)
+			}
+		}),
+		proto.WithEnum(func(e *proto.Enum) {
+			if e.Comment != nil && e.Comment.Cstyle {
+				t.Errorf("enum %s still has Cstyle comment", e.Name)
+			}
+		}),
+		proto.WithRPC(func(r *proto.RPC) {
+			if r.Comment != nil && r.Comment.Cstyle {
+				t.Errorf("rpc %s still has Cstyle comment", r.Name)
+			}
+		}),
+	)
+}
+
+// T006: Test that single-line comments are preserved unchanged
+func TestConvertBlockCommentsPreservesExisting(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "comments"), "commented.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Count comments before
+	commentCountBefore := 0
+	proto.Walk(def,
+		proto.WithService(func(s *proto.Service) {
+			if s.Comment != nil {
+				commentCountBefore++
+			}
+		}),
+		proto.WithMessage(func(m *proto.Message) {
+			if m.Comment != nil {
+				commentCountBefore++
+			}
+		}),
+		proto.WithEnum(func(e *proto.Enum) {
+			if e.Comment != nil {
+				commentCountBefore++
+			}
+		}),
+		proto.WithRPC(func(r *proto.RPC) {
+			if r.Comment != nil {
+				commentCountBefore++
+			}
+		}),
+	)
+
+	ConvertBlockComments(def)
+
+	// Count comments after
+	commentCountAfter := 0
+	proto.Walk(def,
+		proto.WithService(func(s *proto.Service) {
+			if s.Comment != nil {
+				commentCountAfter++
+			}
+		}),
+		proto.WithMessage(func(m *proto.Message) {
+			if m.Comment != nil {
+				commentCountAfter++
+			}
+		}),
+		proto.WithEnum(func(e *proto.Enum) {
+			if e.Comment != nil {
+				commentCountAfter++
+			}
+		}),
+		proto.WithRPC(func(r *proto.RPC) {
+			if r.Comment != nil {
+				commentCountAfter++
+			}
+		}),
+	)
+
+	if commentCountBefore != commentCountAfter {
+		t.Errorf("comment count changed: before=%d, after=%d", commentCountBefore, commentCountAfter)
+	}
+	if commentCountBefore == 0 {
+		t.Error("commented.proto should have comments")
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))
