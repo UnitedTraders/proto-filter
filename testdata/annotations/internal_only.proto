@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package annotations;
+
+service InternalService {
+  // @HasAnyRole({"ADMIN"})
+  // Internal admin operation.
+  rpc AdminOp(AdminOpRequest) returns (AdminOpResponse);
+
+  // @HasAnyRole({"SUPER_ADMIN"})
+  // Another internal admin operation.
+  rpc SuperAdminOp(SuperAdminOpRequest) returns (SuperAdminOpResponse);
+}
+
+message AdminOpRequest {
+  string action = 1;
+}
+
+message AdminOpResponse {
+  bool success = 1;
+}
+
+message SuperAdminOpRequest {
+  string action = 1;
+}
+
+message SuperAdminOpResponse {
+  bool success = 1;
+}

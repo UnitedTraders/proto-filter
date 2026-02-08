@@ -76,6 +76,8 @@ func TestIsPassThrough(t *testing.T) {
 		{"include only", FilterConfig{Include: []string{"a.*"}}, false},
 		{"exclude only", FilterConfig{Exclude: []string{"b.*"}}, false},
 		{"both", FilterConfig{Include: []string{"a.*"}, Exclude: []string{"b.*"}}, false},
+		{"annotations only", FilterConfig{Annotations: []string{"HasAnyRole"}}, false},
+		{"include and annotations", FilterConfig{Include: []string{"a.*"}, Annotations: []string{"Internal"}}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,5 +85,56 @@ func TestIsPassThrough(t *testing.T) {
 				t.Errorf("IsPassThrough: expected %v", tc.expected)
 			}
 		})
+	}
+}
+
+func TestLoadConfigWithAnnotations(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "filter.yaml")
+
+	content := `annotations:
+  - "HasAnyRole"
+  - "Internal"
+`
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Annotations) != 2 {
+		t.Errorf("expected 2 annotations, got %d", len(cfg.Annotations))
+	}
+	if cfg.Annotations[0] != "HasAnyRole" {
+		t.Errorf("annotations[0]: expected HasAnyRole, got %s", cfg.Annotations[0])
+	}
+	if !cfg.HasAnnotations() {
+		t.Error("HasAnnotations should return true")
+	}
+	if cfg.IsPassThrough() {
+		t.Error("config with annotations should not be pass-through")
+	}
+}
+
+func TestLoadConfigAnnotationsWithIncludeExclude(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "filter.yaml")
+
+	content := `include:
+  - "my.package.*"
+annotations:
+  - "HasAnyRole"
+`
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Include) != 1 {
+		t.Errorf("expected 1 include, got %d", len(cfg.Include))
+	}
+	if len(cfg.Annotations) != 1 {
+		t.Errorf("expected 1 annotation, got %d", len(cfg.Annotations))
 	}
 }

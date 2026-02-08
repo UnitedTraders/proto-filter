@@ -171,6 +171,92 @@ func TestSuccessfulPassThrough(t *testing.T) {
 	}
 }
 
+// Test: annotation-based filtering via CLI
+func TestAnnotationFiltering(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"HasAnyRole\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "annotations"),
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Verify verbose output contains annotation info
+	if !strings.Contains(stderr, "removed") {
+		t.Errorf("verbose output should contain 'removed', got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "by annotation") {
+		t.Errorf("verbose output should contain 'by annotation', got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "orphaned") {
+		t.Errorf("verbose output should contain 'orphaned', got: %s", stderr)
+	}
+
+	// service.proto should exist (has remaining methods)
+	serviceOut := filepath.Join(outDir, "service.proto")
+	serviceContent, err := os.ReadFile(serviceOut)
+	if err != nil {
+		t.Fatalf("service.proto should exist: %v", err)
+	}
+	serviceStr := string(serviceContent)
+	if !strings.Contains(serviceStr, "ListOrders") {
+		t.Error("service.proto should contain ListOrders (non-annotated)")
+	}
+	if strings.Contains(serviceStr, "rpc CreateOrder") {
+		t.Error("service.proto should NOT contain rpc CreateOrder (annotated)")
+	}
+
+	// internal_only.proto should NOT exist (all methods annotated → empty service → empty file)
+	internalOut := filepath.Join(outDir, "internal_only.proto")
+	if _, err := os.Stat(internalOut); err == nil {
+		t.Error("internal_only.proto should NOT be in output (all methods annotated)")
+	}
+}
+
+// Test: backward compatibility (no annotations key in config)
+func TestBackwardCompatibilityNoAnnotations(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	// Config with only include, no annotations key
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("include:\n  - \"filter.OrderService\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "filter"),
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Verify no annotation output in verbose (no annotations configured)
+	if strings.Contains(stderr, "by annotation") {
+		t.Errorf("verbose should NOT mention annotations when none configured, got: %s", stderr)
+	}
+
+	// orders.proto should exist
+	if _, err := os.Stat(filepath.Join(outDir, "orders.proto")); err != nil {
+		t.Error("orders.proto should be in output")
+	}
+	// users.proto should NOT exist
+	if _, err := os.Stat(filepath.Join(outDir, "users.proto")); err == nil {
+		t.Error("users.proto should NOT be in output")
+	}
+}
+
 // Test: successful filtering via CLI
 func TestSuccessfulFiltering(t *testing.T) {
 	bin := buildBinary(t)
