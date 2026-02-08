@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package imports;
+
+import "common.proto";
+
+message ListItemsRequest {
+  Pagination pagination = 1;
+}
+
+message Item {
+  string id = 1;
+  string name = 2;
+  Timestamp created_at = 3;
+}
+
+message ListItemsResponse {
+  repeated Item items = 1;
+}
+
+service ItemService {
+  rpc ListItems(ListItemsRequest) returns (ListItemsResponse);
+}

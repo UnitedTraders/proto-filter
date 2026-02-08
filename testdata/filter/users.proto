@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package filter;
+
+import "common.proto";
+
+message User {
+  string id = 1;
+  string email = 2;
+  string name = 3;
+  Status status = 4;
+}
+
+message CreateUserRequest {
+  string email = 1;
+  string name = 2;
+}
+
+message CreateUserResponse {
+  User user = 1;
+}
+
+message ListUsersRequest {
+  Pagination pagination = 1;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+}
+
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+}

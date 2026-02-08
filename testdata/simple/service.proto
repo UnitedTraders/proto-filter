@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package simple;
+
+option go_package = "simple/v1";
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE = 1;
+  STATUS_INACTIVE = 2;
+}
+
+message CreateOrderRequest {
+  string name = 1;
+  double price = 2;
+  Status status = 3;
+}
+
+message CreateOrderResponse {
+  string id = 1;
+  string name = 2;
+  double price = 3;
+  Status status = 4;
+}
+
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+}
