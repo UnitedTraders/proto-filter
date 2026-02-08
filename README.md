@@ -16,6 +16,12 @@ cd proto-filter
 go build -o proto-filter .
 ```
 
+Or pull the Docker image:
+
+```bash
+docker pull ghcr.io/unitedtraders/proto-filter:latest
+```
+
 ## Usage
 
 ### Pass-through (no filtering)
@@ -46,6 +52,28 @@ proto-filter --input ./protos --output ./out --config filter.yaml
 ```
 
 Only definitions matching the include patterns (minus excludes) and their transitive dependencies will appear in the output.
+
+### Docker
+
+The image defaults to `--input /input --output /output --config /filter.yaml`. Mount your directories to these paths:
+
+```bash
+docker run --rm \
+  -v ./protos:/input \
+  -v ./out:/output \
+  -v ./filter.yaml:/filter.yaml \
+  ghcr.io/unitedtraders/proto-filter:latest
+```
+
+Without a config file (pass-through), override the defaults:
+
+```bash
+docker run --rm \
+  -v ./protos:/input \
+  -v ./out:/output \
+  ghcr.io/unitedtraders/proto-filter:latest \
+  --input /input --output /output
+```
 
 ### Verbose mode
 
