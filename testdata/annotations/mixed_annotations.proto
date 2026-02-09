@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package annotations;
+
+// @Internal
+// Internal monitoring service.
+service MonitoringService {
+  rpc CheckHealth(HealthRequest) returns (HealthResponse);
+  rpc GetLogs(LogRequest) returns (LogResponse);
+}
+
+// Public trading service.
+service TradingService {
+  // @HasAnyRole({"ADMIN"})
+  // Admin-only: force-close a position.
+  rpc ForceClose(ForceCloseRequest) returns (ForceCloseResponse);
+
+  // Get current positions for the user.
+  rpc GetPositions(PositionsRequest) returns (PositionsResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  bool healthy = 1;
+}
+
+message LogRequest {
+  string filter = 1;
+}
+
+message LogResponse {
+  repeated string entries = 1;
+}
+
+message ForceCloseRequest {
+  string position_id = 1;
+}
+
+message ForceCloseResponse {
+  bool success = 1;
+}
+
+message PositionsRequest {
+  string user_id = 1;
+}
+
+message PositionsResponse {
+  repeated string position_ids = 1;
+}

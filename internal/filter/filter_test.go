@@ -878,6 +878,211 @@ func TestConvertBlockCommentsPreservesExisting(t *testing.T) {
 	}
 }
 
+// T005: Test service-level annotation filtering
+func TestFilterServicesByAnnotation(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service_annotated.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := FilterServicesByAnnotation(def, []string{"Internal"})
+	if removed != 1 {
+		t.Errorf("expected 1 service removed, got %d", removed)
+	}
+
+	// Verify AdminService is gone and OrderService remains
+	var serviceNames []string
+	proto.Walk(def, proto.WithService(func(s *proto.Service) {
+		serviceNames = append(serviceNames, s.Name)
+	}))
+
+	if len(serviceNames) != 1 {
+		t.Fatalf("expected 1 remaining service, got %d: %v", len(serviceNames), serviceNames)
+	}
+	if serviceNames[0] != "OrderService" {
+		t.Errorf("expected OrderService, got %s", serviceNames[0])
+	}
+
+	// Verify OrderService still has its method
+	var methodNames []string
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodNames = append(methodNames, r.Name)
+	}))
+	if len(methodNames) != 1 || methodNames[0] != "ListOrders" {
+		t.Errorf("expected [ListOrders], got %v", methodNames)
+	}
+}
+
+// T006: Test service-level filtering with no matching annotation
+func TestFilterServicesByAnnotationNoMatch(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service_annotated.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := FilterServicesByAnnotation(def, []string{"NonExistent"})
+	if removed != 0 {
+		t.Errorf("expected 0 services removed, got %d", removed)
+	}
+
+	var serviceCount int
+	proto.Walk(def, proto.WithService(func(s *proto.Service) { serviceCount++ }))
+	if serviceCount != 2 {
+		t.Errorf("expected 2 services unchanged, got %d", serviceCount)
+	}
+}
+
+// T007: Test service-level filtering with multiple annotations (any match sufficient)
+func TestFilterServicesByAnnotationMultipleAnnotations(t *testing.T) {
+	// Create a proto AST with a service having @Internal and @Deprecated
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "MultiAnnotatedService",
+				Comment: &proto.Comment{
+					Lines: []string{" @Internal", " @Deprecated"},
+				},
+			},
+			&proto.Service{
+				Name: "CleanService",
+			},
+		},
+	}
+
+	removed := FilterServicesByAnnotation(def, []string{"Internal"})
+	if removed != 1 {
+		t.Errorf("expected 1 service removed (any match sufficient), got %d", removed)
+	}
+
+	var serviceNames []string
+	proto.Walk(def, proto.WithService(func(s *proto.Service) {
+		serviceNames = append(serviceNames, s.Name)
+	}))
+	if len(serviceNames) != 1 || serviceNames[0] != "CleanService" {
+		t.Errorf("expected [CleanService], got %v", serviceNames)
+	}
+}
+
+// T009: Golden file comparison test for service-annotated filtering
+func TestGoldenFileServiceAnnotated(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service_annotated.proto")
+	goldenPath := filepath.Join(testdataDir(t, "annotations"), "expected", "service_annotated.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	FilterServicesByAnnotation(def, []string{"Internal"})
+	RemoveOrphanedDefinitions(def, "annotations")
+	ConvertBlockComments(def)
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "service_annotated.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// T010: Golden file comparison test for mixed service+method annotation filtering
+func TestGoldenFileMixedAnnotations(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "mixed_annotations.proto")
+	goldenPath := filepath.Join(testdataDir(t, "annotations"), "expected", "mixed_annotations.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	FilterServicesByAnnotation(def, []string{"Internal", "HasAnyRole"})
+	FilterMethodsByAnnotation(def, []string{"Internal", "HasAnyRole"})
+	RemoveEmptyServices(def)
+	RemoveOrphanedDefinitions(def, "annotations")
+	ConvertBlockComments(def)
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "mixed_annotations.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// T011: Test all services removed → no remaining definitions
+func TestFilterServicesByAnnotationAllServicesRemoved(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service_annotated.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Programmatically add @Internal to OrderService's comment
+	for _, elem := range def.Elements {
+		if svc, ok := elem.(*proto.Service); ok && svc.Name == "OrderService" {
+			svc.Comment = &proto.Comment{
+				Lines: []string{" @Internal"},
+			}
+		}
+	}
+
+	removed := FilterServicesByAnnotation(def, []string{"Internal"})
+	if removed != 2 {
+		t.Errorf("expected 2 services removed, got %d", removed)
+	}
+
+	RemoveOrphanedDefinitions(def, "annotations")
+
+	if HasRemainingDefinitions(def) {
+		t.Error("expected no remaining definitions after all services removed and orphans cleaned up")
+	}
+}
+
+// T012: Test empty annotation list → no services removed (backward compatibility)
+func TestFilterServicesByAnnotationEmptyAnnotationList(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "service_annotated.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := FilterServicesByAnnotation(def, []string{})
+	if removed != 0 {
+		t.Errorf("expected 0 services removed with empty annotations, got %d", removed)
+	}
+
+	removed = FilterServicesByAnnotation(def, nil)
+	if removed != 0 {
+		t.Errorf("expected 0 services removed with nil annotations, got %d", removed)
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))

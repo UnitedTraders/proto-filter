@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package annotations;
+
+// Public-facing order operations.
+service OrderService {
+  rpc ListOrders (ListOrdersRequest) returns (ListOrdersResponse);
+}
+
+message ListOrdersRequest {
+  int32 page = 1;
+}
+
+message ListOrdersResponse {
+  repeated string ids = 1;
+}

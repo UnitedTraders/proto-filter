@@ -158,6 +158,44 @@ func ExtractAnnotations(comment *proto.Comment) []string {
 	return annotations
 }
 
+// FilterServicesByAnnotation removes entire services from the proto AST
+// whose comments contain any of the specified annotations. Returns the
+// number of services removed.
+func FilterServicesByAnnotation(def *proto.Proto, annotations []string) int {
+	if len(annotations) == 0 {
+		return 0
+	}
+	annotSet := make(map[string]bool, len(annotations))
+	for _, a := range annotations {
+		annotSet[a] = true
+	}
+
+	filtered := make([]proto.Visitee, 0, len(def.Elements))
+	removed := 0
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			filtered = append(filtered, elem)
+			continue
+		}
+		annots := ExtractAnnotations(svc.Comment)
+		shouldRemove := false
+		for _, a := range annots {
+			if annotSet[a] {
+				shouldRemove = true
+				break
+			}
+		}
+		if shouldRemove {
+			removed++
+		} else {
+			filtered = append(filtered, elem)
+		}
+	}
+	def.Elements = filtered
+	return removed
+}
+
 // FilterMethodsByAnnotation removes RPC methods from services in the
 // given proto AST whose comments contain any of the specified annotations.
 // Returns the number of methods removed.
