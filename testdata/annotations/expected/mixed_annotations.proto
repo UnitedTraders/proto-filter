@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package annotations;
+
+// Public trading service.
+service TradingService {
+
+  // Get current positions for the user.
+  rpc GetPositions (PositionsRequest) returns (PositionsResponse);
+}
+
+message PositionsRequest {
+  string user_id = 1;
+}
+
+message PositionsResponse {
+  repeated string position_ids = 1;
+}

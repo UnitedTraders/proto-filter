@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package annotations;
+
+// @Internal
+// Administrative operations for system management.
+service AdminService {
+  rpc ResetCache(ResetCacheRequest) returns (ResetCacheResponse);
+  rpc GetMetrics(MetricsRequest) returns (MetricsResponse);
+}
+
+// Public-facing order operations.
+service OrderService {
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+}
+
+message ResetCacheRequest {}
+
+message ResetCacheResponse {
+  bool success = 1;
+}
+
+message MetricsRequest {
+  string metric_name = 1;
+}
+
+message MetricsResponse {
+  int64 value = 1;
+}
+
+message ListOrdersRequest {
+  int32 page = 1;
+}
+
+message ListOrdersResponse {
+  repeated string ids = 1;
+}

@@ -357,3 +357,111 @@ func TestSuccessfulFiltering(t *testing.T) {
 		t.Errorf("verbose should report included count, got: %s", stderr)
 	}
 }
+
+// T015: Test service-level annotation filtering via CLI
+func TestServiceAnnotationFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"Internal\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "annotations"),
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// service_annotated.proto should exist with only OrderService
+	serviceOut := filepath.Join(outDir, "service_annotated.proto")
+	content, err := os.ReadFile(serviceOut)
+	if err != nil {
+		t.Fatalf("service_annotated.proto should exist: %v", err)
+	}
+	out := string(content)
+	if !strings.Contains(out, "OrderService") {
+		t.Error("output should contain OrderService (not annotated)")
+	}
+	if strings.Contains(out, "AdminService") {
+		t.Error("output should NOT contain AdminService (annotated @Internal)")
+	}
+	if strings.Contains(out, "ResetCache") {
+		t.Error("output should NOT contain ResetCache methods (AdminService removed)")
+	}
+	if strings.Contains(out, "MetricsRequest") {
+		t.Error("output should NOT contain MetricsRequest (orphaned after AdminService removal)")
+	}
+}
+
+// T016: Test mixed service+method annotation filtering via CLI
+func TestMixedServiceMethodAnnotationFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"Internal\"\n  - \"HasAnyRole\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "annotations"),
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// mixed_annotations.proto should exist with only TradingService.GetPositions
+	mixedOut := filepath.Join(outDir, "mixed_annotations.proto")
+	content, err := os.ReadFile(mixedOut)
+	if err != nil {
+		t.Fatalf("mixed_annotations.proto should exist: %v", err)
+	}
+	out := string(content)
+	if strings.Contains(out, "MonitoringService") {
+		t.Error("output should NOT contain MonitoringService (annotated @Internal)")
+	}
+	if !strings.Contains(out, "TradingService") {
+		t.Error("output should contain TradingService (not annotated at service level)")
+	}
+	if strings.Contains(out, "ForceClose") {
+		t.Error("output should NOT contain ForceClose (annotated @HasAnyRole at method level)")
+	}
+	if !strings.Contains(out, "GetPositions") {
+		t.Error("output should contain GetPositions (not annotated)")
+	}
+
+	// internal_only.proto should NOT exist (all methods have @HasAnyRole)
+	internalOut := filepath.Join(outDir, "internal_only.proto")
+	if _, err := os.Stat(internalOut); err == nil {
+		t.Error("internal_only.proto should NOT be in output (all methods annotated)")
+	}
+}
+
+// T017: Test service annotation filtering verbose output
+func TestServiceAnnotationFilteringVerbose(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"Internal\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "annotations"),
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	if !strings.Contains(stderr, "services by annotation") {
+		t.Errorf("verbose output should contain 'services by annotation', got: %s", stderr)
+	}
+}
