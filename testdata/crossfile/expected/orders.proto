@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package crossfile;
+
+import "common.proto";
+
+// Order processing service.
+service OrderService {
+
+  // List all orders with pagination.
+  rpc ListOrders (ListOrdersRequest) returns (ListOrdersResponse);
+}
+
+message ListOrdersRequest {
+  Pagination pagination = 1;
+}
+
+message ListOrdersResponse {
+  repeated Money totals = 1;
+}

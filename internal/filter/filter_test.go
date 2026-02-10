@@ -1083,6 +1083,264 @@ func TestFilterServicesByAnnotationEmptyAnnotationList(t *testing.T) {
 	}
 }
 
+// parseCrossFileFixtures parses the crossfile test fixtures, excluding
+// the expected/ subdirectory.
+func parseCrossFileFixtures(t *testing.T) ([]struct {
+	rel string
+	def *proto.Proto
+	pkg string
+}, *deps.Graph) {
+	t.Helper()
+	inputDir := testdataDir(t, "crossfile")
+
+	type parsedFile struct {
+		rel string
+		def *proto.Proto
+		pkg string
+	}
+	var parsed []parsedFile
+	graph := deps.NewGraph()
+
+	for _, name := range []string{"common.proto", "orders.proto", "payments.proto"} {
+		def, err := parser.ParseProtoFile(filepath.Join(inputDir, name))
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		pkg := parser.ExtractPackage(def)
+		parsed = append(parsed, parsedFile{name, def, pkg})
+
+		defs := parser.ExtractDefinitions(def, pkg)
+		for _, d := range defs {
+			graph.AddDefinition(&deps.Definition{
+				FQN:        d.FQN,
+				Kind:       d.Kind,
+				File:       name,
+				References: d.References,
+			})
+		}
+	}
+
+	// Convert to the returned type
+	result := make([]struct {
+		rel string
+		def *proto.Proto
+		pkg string
+	}, len(parsed))
+	for i, pf := range parsed {
+		result[i].rel = pf.rel
+		result[i].def = pf.def
+		result[i].pkg = pf.pkg
+	}
+	return result, graph
+}
+
+// T007: Cross-file annotation filter preserves referenced common types
+func TestCrossFileAnnotationFilterPreservesReferencedTypes(t *testing.T) {
+	parsed, graph := parseCrossFileFixtures(t)
+
+	// Apply name-based filter (annotation-only config: empty include/exclude returns all FQNs)
+	annotations := []string{"Internal", "HasAnyRole"}
+	keepFQNs, requiredFileSet := applyCrossFileFilter(t, graph, annotations)
+
+	// Process each file through the full pipeline
+	for i := range parsed {
+		if !requiredFileSet[parsed[i].rel] {
+			continue
+		}
+		PruneAST(parsed[i].def, parsed[i].pkg, keepFQNs)
+
+		sr := FilterServicesByAnnotation(parsed[i].def, annotations)
+		mr := FilterMethodsByAnnotation(parsed[i].def, annotations)
+		RemoveEmptyServices(parsed[i].def)
+		if sr > 0 || mr > 0 {
+			RemoveOrphanedDefinitions(parsed[i].def, parsed[i].pkg)
+		}
+	}
+
+	// Find common.proto and verify its contents
+	for _, pf := range parsed {
+		if pf.rel != "common.proto" {
+			continue
+		}
+
+		msgSet := collectMessageNames(pf.def)
+
+		// Pagination and Money must survive (referenced by surviving OrderService methods)
+		if !msgSet["Pagination"] {
+			t.Error("Pagination should survive in common.proto (referenced by ListOrdersRequest)")
+		}
+		if !msgSet["Money"] {
+			t.Error("Money should survive in common.proto (referenced by ListOrdersResponse)")
+		}
+
+		// ErrorDetail survives because common file is not subject to orphan removal
+		// (no services were removed from common.proto itself)
+		if !msgSet["ErrorDetail"] {
+			t.Error("ErrorDetail should survive in common.proto (common file unaffected by annotation filtering)")
+		}
+	}
+}
+
+// applyCrossFileFilter runs the name-based filter path and returns keepFQNs and requiredFiles.
+func applyCrossFileFilter(t *testing.T, graph *deps.Graph, annotations []string) (map[string]bool, map[string]bool) {
+	t.Helper()
+	cfg := &config.FilterConfig{
+		Annotations: annotations,
+	}
+	allFQNs := make([]string, 0, len(graph.Nodes))
+	for fqn := range graph.Nodes {
+		allFQNs = append(allFQNs, fqn)
+	}
+
+	included, err := ApplyFilter(cfg, allFQNs)
+	if err != nil {
+		t.Fatalf("apply filter: %v", err)
+	}
+
+	includedList := make([]string, 0, len(included))
+	for fqn := range included {
+		includedList = append(includedList, fqn)
+	}
+	allNeeded := graph.TransitiveDeps(includedList)
+
+	keepFQNs := make(map[string]bool)
+	for _, fqn := range allNeeded {
+		keepFQNs[fqn] = true
+	}
+
+	requiredFiles := graph.RequiredFiles(allNeeded)
+	requiredFileSet := make(map[string]bool)
+	for _, f := range requiredFiles {
+		requiredFileSet[f] = true
+	}
+	return keepFQNs, requiredFileSet
+}
+
+// collectMessageNames returns a set of message names in the proto AST.
+func collectMessageNames(def *proto.Proto) map[string]bool {
+	msgSet := make(map[string]bool)
+	proto.Walk(def, proto.WithMessage(func(m *proto.Message) {
+		msgSet[m.Name] = true
+	}))
+	return msgSet
+}
+
+// T008: Cross-file service removal with only @Internal annotation
+func TestCrossFileServiceRemovalOrphansCommonTypes(t *testing.T) {
+	parsed, graph := parseCrossFileFixtures(t)
+	annotations := []string{"Internal"}
+	keepFQNs, requiredFileSet := applyCrossFileFilter(t, graph, annotations)
+
+	// Process each file
+	for i := range parsed {
+		if !requiredFileSet[parsed[i].rel] {
+			continue
+		}
+		PruneAST(parsed[i].def, parsed[i].pkg, keepFQNs)
+
+		sr := FilterServicesByAnnotation(parsed[i].def, annotations)
+		mr := FilterMethodsByAnnotation(parsed[i].def, annotations)
+		RemoveEmptyServices(parsed[i].def)
+		if sr > 0 || mr > 0 {
+			RemoveOrphanedDefinitions(parsed[i].def, parsed[i].pkg)
+		}
+	}
+
+	// Verify common.proto: Pagination, Money, ErrorDetail should all survive
+	for _, pf := range parsed {
+		if pf.rel != "common.proto" {
+			continue
+		}
+
+		msgSet := collectMessageNames(pf.def)
+
+		if !msgSet["Pagination"] {
+			t.Error("Pagination should survive (referenced by OrderService)")
+		}
+		if !msgSet["Money"] {
+			t.Error("Money should survive (referenced by OrderService)")
+		}
+		if !msgSet["ErrorDetail"] {
+			t.Error("ErrorDetail should survive in common.proto (common file not subject to orphan removal)")
+		}
+	}
+
+	// Verify orders.proto: OrderService should be fully intact (no @Internal annotation)
+	for _, pf := range parsed {
+		if pf.rel != "orders.proto" {
+			continue
+		}
+
+		var methodNames []string
+		proto.Walk(pf.def, proto.WithRPC(func(r *proto.RPC) {
+			methodNames = append(methodNames, r.Name)
+		}))
+
+		if len(methodNames) != 2 {
+			t.Errorf("orders.proto should have 2 methods, got %d: %v", len(methodNames), methodNames)
+		}
+	}
+
+	// Verify payments.proto: PaymentService should be removed
+	for _, pf := range parsed {
+		if pf.rel != "payments.proto" {
+			continue
+		}
+
+		if HasRemainingDefinitions(pf.def) {
+			t.Error("payments.proto should have no remaining definitions after PaymentService removal")
+		}
+	}
+}
+
+// T009: Common file with no services is preserved by annotation filtering
+func TestCrossFileCommonFileNoServicesPreserved(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "crossfile"), "common.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Verify common.proto has no services
+	var serviceCount int
+	proto.Walk(def, proto.WithService(func(s *proto.Service) { serviceCount++ }))
+	if serviceCount != 0 {
+		t.Fatalf("common.proto should have 0 services, got %d", serviceCount)
+	}
+
+	// Apply annotation filtering — should have no effect
+	sr := FilterServicesByAnnotation(def, []string{"Internal", "HasAnyRole"})
+	mr := FilterMethodsByAnnotation(def, []string{"Internal", "HasAnyRole"})
+
+	if sr != 0 {
+		t.Errorf("expected 0 services removed from common.proto, got %d", sr)
+	}
+	if mr != 0 {
+		t.Errorf("expected 0 methods removed from common.proto, got %d", mr)
+	}
+
+	// Since nothing was removed, orphan removal should not run (per pipeline logic)
+	// But even if it did run, verify all messages are still present
+	var msgNames []string
+	proto.Walk(def, proto.WithMessage(func(m *proto.Message) {
+		msgNames = append(msgNames, m.Name)
+	}))
+
+	if len(msgNames) != 3 {
+		t.Errorf("expected 3 messages in common.proto, got %d: %v", len(msgNames), msgNames)
+	}
+
+	msgSet := make(map[string]bool)
+	for _, n := range msgNames {
+		msgSet[n] = true
+	}
+	for _, expected := range []string{"Pagination", "Money", "ErrorDetail"} {
+		if !msgSet[expected] {
+			t.Errorf("%s should remain in common.proto (annotation filtering has no effect on service-less files)", expected)
+		}
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))

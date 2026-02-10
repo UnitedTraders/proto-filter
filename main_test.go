@@ -465,3 +465,182 @@ func TestServiceAnnotationFilteringVerbose(t *testing.T) {
 		t.Errorf("verbose output should contain 'services by annotation', got: %s", stderr)
 	}
 }
+
+// setupCrossFileInput copies only the .proto input files (not expected/) to a temp dir
+func setupCrossFileInput(t *testing.T) string {
+	t.Helper()
+	srcDir := testdataDir(t, "crossfile")
+	inputDir := t.TempDir()
+	for _, name := range []string{"common.proto", "orders.proto", "payments.proto"} {
+		data, err := os.ReadFile(filepath.Join(srcDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(inputDir, name), data, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return inputDir
+}
+
+// T010: Cross-file annotation filtering CLI integration test
+func TestCrossFileAnnotationFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupCrossFileInput(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"Internal\"\n  - \"HasAnyRole\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// common.proto should exist with Pagination and Money preserved
+	commonOut := filepath.Join(outDir, "common.proto")
+	commonContent, err := os.ReadFile(commonOut)
+	if err != nil {
+		t.Fatalf("common.proto should exist in output: %v", err)
+	}
+	commonStr := string(commonContent)
+	if !strings.Contains(commonStr, "Pagination") {
+		t.Error("common.proto should contain Pagination (referenced by surviving OrderService)")
+	}
+	if !strings.Contains(commonStr, "Money") {
+		t.Error("common.proto should contain Money (referenced by surviving OrderService)")
+	}
+
+	// orders.proto should exist with only ListOrders method
+	ordersOut := filepath.Join(outDir, "orders.proto")
+	ordersContent, err := os.ReadFile(ordersOut)
+	if err != nil {
+		t.Fatalf("orders.proto should exist: %v", err)
+	}
+	ordersStr := string(ordersContent)
+	if !strings.Contains(ordersStr, "OrderService") {
+		t.Error("orders.proto should contain OrderService")
+	}
+	if !strings.Contains(ordersStr, "ListOrders") {
+		t.Error("orders.proto should contain ListOrders (not annotated)")
+	}
+	if strings.Contains(ordersStr, "GetOrderDetails") {
+		t.Error("orders.proto should NOT contain GetOrderDetails (annotated @HasAnyRole)")
+	}
+	if strings.Contains(ordersStr, "GetOrderDetailsRequest") {
+		t.Error("orders.proto should NOT contain GetOrderDetailsRequest (orphaned)")
+	}
+	if strings.Contains(ordersStr, "GetOrderDetailsResponse") {
+		t.Error("orders.proto should NOT contain GetOrderDetailsResponse (orphaned)")
+	}
+
+	// payments.proto should NOT exist (PaymentService removed, no remaining definitions)
+	paymentsOut := filepath.Join(outDir, "payments.proto")
+	if _, err := os.Stat(paymentsOut); err == nil {
+		t.Error("payments.proto should NOT be in output (PaymentService removed by @Internal)")
+	}
+}
+
+// T011: Cross-file shared types survive partial service removal
+func TestCrossFileSharedTypesSurvivePartialServiceRemoval(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupCrossFileInput(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	// Only filter @Internal (service-level), not @HasAnyRole (method-level)
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"Internal\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// common.proto should exist with all shared types preserved
+	commonOut := filepath.Join(outDir, "common.proto")
+	commonContent, err := os.ReadFile(commonOut)
+	if err != nil {
+		t.Fatalf("common.proto should exist: %v", err)
+	}
+	commonStr := string(commonContent)
+	if !strings.Contains(commonStr, "Pagination") {
+		t.Error("Pagination should survive (referenced by surviving OrderService)")
+	}
+	if !strings.Contains(commonStr, "Money") {
+		t.Error("Money should survive (referenced by surviving OrderService)")
+	}
+
+	// orders.proto should be fully intact (both methods survive)
+	ordersOut := filepath.Join(outDir, "orders.proto")
+	ordersContent, err := os.ReadFile(ordersOut)
+	if err != nil {
+		t.Fatalf("orders.proto should exist: %v", err)
+	}
+	ordersStr := string(ordersContent)
+	if !strings.Contains(ordersStr, "ListOrders") {
+		t.Error("orders.proto should contain ListOrders")
+	}
+	if !strings.Contains(ordersStr, "GetOrderDetails") {
+		t.Error("orders.proto should contain GetOrderDetails (not filtered by @Internal)")
+	}
+
+	// payments.proto should NOT exist
+	paymentsOut := filepath.Join(outDir, "payments.proto")
+	if _, err := os.Stat(paymentsOut); err == nil {
+		t.Error("payments.proto should NOT be in output")
+	}
+}
+
+// T012: Cross-file golden file comparison
+func TestCrossFileGoldenFileComparison(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupCrossFileInput(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"Internal\"\n  - \"HasAnyRole\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Compare each output file against golden files
+	goldenDir := filepath.Join(testdataDir(t, "crossfile"), "expected")
+
+	for _, name := range []string{"common.proto", "orders.proto"} {
+		actual, err := os.ReadFile(filepath.Join(outDir, name))
+		if err != nil {
+			t.Fatalf("read output %s: %v", name, err)
+		}
+		expected, err := os.ReadFile(filepath.Join(goldenDir, name))
+		if err != nil {
+			t.Fatalf("read golden %s: %v", name, err)
+		}
+		if string(actual) != string(expected) {
+			t.Errorf("%s: output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s",
+				name, string(actual), string(expected))
+		}
+	}
+
+	// payments.proto should not exist in output
+	if _, err := os.Stat(filepath.Join(outDir, "payments.proto")); err == nil {
+		t.Error("payments.proto should NOT be in output (no golden file expected)")
+	}
+}
