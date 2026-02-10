@@ -68,6 +68,10 @@ func run() int {
 			fmt.Fprintf(os.Stderr, "proto-filter: error: %v\n", err)
 			return 2
 		}
+		if err := cfg.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "proto-filter: error: %v\n", err)
+			return 2
+		}
 	}
 
 	// Discover proto files
@@ -175,10 +179,18 @@ func run() int {
 			filter.PruneAST(pf.def, pf.pkg, keepFQNs)
 		}
 
-		// Annotation-based filtering (service-level then method-level)
+		// Annotation-based filtering
 		if cfg != nil && cfg.HasAnnotations() {
-			sr := filter.FilterServicesByAnnotation(pf.def, cfg.Annotations)
-			mr := filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations)
+			var sr, mr int
+			if cfg.HasAnnotationExclude() {
+				// Exclude mode: remove services first, then methods
+				sr = filter.FilterServicesByAnnotation(pf.def, cfg.Annotations.Exclude)
+				mr = filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations.Exclude)
+			} else if cfg.HasAnnotationInclude() {
+				// Include mode: filter methods first, then services
+				mr = filter.IncludeMethodsByAnnotation(pf.def, cfg.Annotations.Include)
+				sr = filter.IncludeServicesByAnnotation(pf.def, cfg.Annotations.Include)
+			}
 			servicesRemoved += sr
 			methodsRemoved += mr
 			filter.RemoveEmptyServices(pf.def)

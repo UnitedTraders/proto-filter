@@ -746,3 +746,104 @@ func TestMixedStyleAnnotationFilteringCLI(t *testing.T) {
 		t.Error("output should NOT contain DeleteOrderRequest (orphaned)")
 	}
 }
+
+// T017: CLI integration test for include-mode annotation filtering
+func TestIncludeAnnotationFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "include_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"Public\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// include_service.proto should exist with only annotated methods
+	outFile := filepath.Join(outDir, "include_service.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("include_service.proto should exist: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "rpc CreateOrder") {
+		t.Error("output should contain rpc CreateOrder (has @Public)")
+	}
+	if !strings.Contains(out, "rpc DeleteOrder") {
+		t.Error("output should contain rpc DeleteOrder (has [Public])")
+	}
+	if strings.Contains(out, "ListOrders") {
+		t.Error("output should NOT contain ListOrders (no Public annotation)")
+	}
+	if strings.Contains(out, "ListOrdersRequest") {
+		t.Error("output should NOT contain ListOrdersRequest (orphaned)")
+	}
+}
+
+// T021: CLI integration test for structured exclude annotation filtering
+func TestStructuredExcludeAnnotationFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  exclude:\n    - \"HasAnyRole\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outFile := filepath.Join(outDir, "service.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("service.proto should exist: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "ListOrders") {
+		t.Error("output should contain ListOrders (not annotated)")
+	}
+	if strings.Contains(out, "rpc CreateOrder") {
+		t.Error("output should NOT contain rpc CreateOrder (annotated @HasAnyRole)")
+	}
+	if strings.Contains(out, "rpc DeleteOrder") {
+		t.Error("output should NOT contain rpc DeleteOrder (annotated @HasAnyRole)")
+	}
+}
+
+// T025: CLI integration test for mutual exclusivity error
+func TestMutualExclusivityErrorCLI(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"Public\"\n  exclude:\n    - \"Internal\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "simple"),
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Errorf("stderr should contain 'mutually exclusive', got: %s", stderr)
+	}
+}
