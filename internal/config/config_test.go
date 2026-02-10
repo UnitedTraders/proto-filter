@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -76,8 +77,9 @@ func TestIsPassThrough(t *testing.T) {
 		{"include only", FilterConfig{Include: []string{"a.*"}}, false},
 		{"exclude only", FilterConfig{Exclude: []string{"b.*"}}, false},
 		{"both", FilterConfig{Include: []string{"a.*"}, Exclude: []string{"b.*"}}, false},
-		{"annotations only", FilterConfig{Annotations: []string{"HasAnyRole"}}, false},
-		{"include and annotations", FilterConfig{Include: []string{"a.*"}, Annotations: []string{"Internal"}}, false},
+		{"annotations exclude only", FilterConfig{Annotations: AnnotationConfig{Exclude: []string{"HasAnyRole"}}}, false},
+		{"annotations include only", FilterConfig{Annotations: AnnotationConfig{Include: []string{"Public"}}}, false},
+		{"include and annotations", FilterConfig{Include: []string{"a.*"}, Annotations: AnnotationConfig{Exclude: []string{"Internal"}}}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,11 +104,11 @@ func TestLoadConfigWithAnnotations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}
-	if len(cfg.Annotations) != 2 {
-		t.Errorf("expected 2 annotations, got %d", len(cfg.Annotations))
+	if len(cfg.Annotations.Exclude) != 2 {
+		t.Errorf("expected 2 annotations in exclude, got %d", len(cfg.Annotations.Exclude))
 	}
-	if cfg.Annotations[0] != "HasAnyRole" {
-		t.Errorf("annotations[0]: expected HasAnyRole, got %s", cfg.Annotations[0])
+	if cfg.Annotations.Exclude[0] != "HasAnyRole" {
+		t.Errorf("annotations.exclude[0]: expected HasAnyRole, got %s", cfg.Annotations.Exclude[0])
 	}
 	if !cfg.HasAnnotations() {
 		t.Error("HasAnnotations should return true")
@@ -134,7 +136,117 @@ annotations:
 	if len(cfg.Include) != 1 {
 		t.Errorf("expected 1 include, got %d", len(cfg.Include))
 	}
-	if len(cfg.Annotations) != 1 {
-		t.Errorf("expected 1 annotation, got %d", len(cfg.Annotations))
+	if len(cfg.Annotations.Exclude) != 1 {
+		t.Errorf("expected 1 annotation in exclude, got %d", len(cfg.Annotations.Exclude))
+	}
+}
+
+// T018: Test structured exclude config format
+func TestLoadConfigStructuredExclude(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "filter.yaml")
+
+	content := "annotations:\n  exclude:\n    - \"HasAnyRole\"\n"
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Annotations.Exclude) != 1 || cfg.Annotations.Exclude[0] != "HasAnyRole" {
+		t.Errorf("expected Exclude=[HasAnyRole], got %v", cfg.Annotations.Exclude)
+	}
+	if len(cfg.Annotations.Include) != 0 {
+		t.Errorf("expected empty Include, got %v", cfg.Annotations.Include)
+	}
+	if !cfg.HasAnnotationExclude() {
+		t.Error("HasAnnotationExclude should return true")
+	}
+	if cfg.HasAnnotationInclude() {
+		t.Error("HasAnnotationInclude should return false")
+	}
+}
+
+// T019: Test structured include config format
+func TestLoadConfigStructuredInclude(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "filter.yaml")
+
+	content := "annotations:\n  include:\n    - \"Public\"\n"
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Annotations.Include) != 1 || cfg.Annotations.Include[0] != "Public" {
+		t.Errorf("expected Include=[Public], got %v", cfg.Annotations.Include)
+	}
+	if len(cfg.Annotations.Exclude) != 0 {
+		t.Errorf("expected empty Exclude, got %v", cfg.Annotations.Exclude)
+	}
+	if !cfg.HasAnnotationInclude() {
+		t.Error("HasAnnotationInclude should return true")
+	}
+	if cfg.HasAnnotationExclude() {
+		t.Error("HasAnnotationExclude should return false")
+	}
+}
+
+// T020: Test flat annotations backward compatibility
+func TestLoadConfigFlatAnnotationsBackwardCompat(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "filter.yaml")
+
+	content := "annotations:\n  - \"HasAnyRole\"\n"
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Annotations.Exclude) != 1 || cfg.Annotations.Exclude[0] != "HasAnyRole" {
+		t.Errorf("expected Exclude=[HasAnyRole] from flat format, got %v", cfg.Annotations.Exclude)
+	}
+	if len(cfg.Annotations.Include) != 0 {
+		t.Errorf("expected empty Include from flat format, got %v", cfg.Annotations.Include)
+	}
+}
+
+// T022: Test mutual exclusivity validation
+func TestValidateMutualExclusivity(t *testing.T) {
+	cfg := FilterConfig{
+		Annotations: AnnotationConfig{
+			Include: []string{"Public"},
+			Exclude: []string{"Internal"},
+		},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for mutually exclusive annotations")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("error should mention 'mutually exclusive', got: %v", err)
+	}
+}
+
+// T023: Test validation passes with empty exclude list
+func TestValidateEmptyListsPass(t *testing.T) {
+	cfg := FilterConfig{
+		Annotations: AnnotationConfig{
+			Include: []string{"Public"},
+			Exclude: []string{},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error with empty exclude, got: %v", err)
+	}
+}
+
+// T024: Test validation passes with no annotations
+func TestValidateNoAnnotationsPass(t *testing.T) {
+	cfg := FilterConfig{}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error with no annotations, got: %v", err)
 	}
 }

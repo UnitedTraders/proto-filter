@@ -1197,7 +1197,7 @@ func TestCrossFileAnnotationFilterPreservesReferencedTypes(t *testing.T) {
 func applyCrossFileFilter(t *testing.T, graph *deps.Graph, annotations []string) (map[string]bool, map[string]bool) {
 	t.Helper()
 	cfg := &config.FilterConfig{
-		Annotations: annotations,
+		Annotations: config.AnnotationConfig{Exclude: annotations},
 	}
 	allFQNs := make([]string, 0, len(graph.Nodes))
 	for fqn := range graph.Nodes {
@@ -1486,6 +1486,148 @@ func TestGoldenFileMixedStyles(t *testing.T) {
 
 	outputDir := t.TempDir()
 	outputPath := filepath.Join(outputDir, "mixed_styles.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// T010: Test include-mode method filtering
+func TestIncludeMethodsByAnnotation(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "include_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := IncludeMethodsByAnnotation(def, []string{"Public"})
+	if removed != 1 {
+		t.Errorf("expected 1 method removed (unannotated ListOrders), got %d", removed)
+	}
+
+	var methodNames []string
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodNames = append(methodNames, r.Name)
+	}))
+
+	if len(methodNames) != 2 {
+		t.Fatalf("expected 2 remaining methods, got %d: %v", len(methodNames), methodNames)
+	}
+	nameSet := make(map[string]bool)
+	for _, n := range methodNames {
+		nameSet[n] = true
+	}
+	if !nameSet["CreateOrder"] {
+		t.Error("CreateOrder should remain (has @Public)")
+	}
+	if !nameSet["DeleteOrder"] {
+		t.Error("DeleteOrder should remain (has [Public])")
+	}
+	if nameSet["ListOrders"] {
+		t.Error("ListOrders should be removed (no Public annotation)")
+	}
+}
+
+// T011: Test include-mode service filtering
+func TestIncludeServicesByAnnotation(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "PublicService",
+				Comment: &proto.Comment{
+					Lines: []string{" @Public"},
+				},
+			},
+			&proto.Service{
+				Name: "InternalService",
+				Comment: &proto.Comment{
+					Lines: []string{" @Internal"},
+				},
+			},
+			&proto.Service{
+				Name: "UnannotatedService",
+			},
+		},
+	}
+
+	removed := IncludeServicesByAnnotation(def, []string{"Public"})
+	if removed != 1 {
+		t.Errorf("expected 1 service removed (InternalService has non-matching annotation), got %d", removed)
+	}
+
+	var serviceNames []string
+	proto.Walk(def, proto.WithService(func(s *proto.Service) {
+		serviceNames = append(serviceNames, s.Name)
+	}))
+
+	// PublicService kept (has matching annotation)
+	// UnannotatedService kept (no annotations, deferred to method-level filtering)
+	// InternalService removed (has annotation but not matching)
+	nameSet := make(map[string]bool)
+	for _, n := range serviceNames {
+		nameSet[n] = true
+	}
+	if !nameSet["PublicService"] {
+		t.Error("PublicService should remain (has @Public)")
+	}
+	if !nameSet["UnannotatedService"] {
+		t.Error("UnannotatedService should remain (no annotations, left for method-level filtering)")
+	}
+	if nameSet["InternalService"] {
+		t.Error("InternalService should be removed (has @Internal, not matching @Public)")
+	}
+}
+
+// T012: Test include-mode with no matching annotations
+func TestIncludeMethodsByAnnotationNoMatch(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "include_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := IncludeMethodsByAnnotation(def, []string{"NonExistent"})
+	if removed != 3 {
+		t.Errorf("expected 3 methods removed (none match), got %d", removed)
+	}
+
+	var methodCount int
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodCount++
+	}))
+	if methodCount != 0 {
+		t.Errorf("expected 0 remaining methods, got %d", methodCount)
+	}
+}
+
+// T013: Golden file test for include_service.proto
+func TestGoldenFileIncludeService(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "include_service.proto")
+	goldenPath := filepath.Join(testdataDir(t, "annotations"), "expected", "include_service.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	IncludeMethodsByAnnotation(def, []string{"Public"})
+	RemoveOrphanedDefinitions(def, "annotations")
+	ConvertBlockComments(def)
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "include_service.proto")
 	if err := writer.WriteProtoFile(def, outputPath); err != nil {
 		t.Fatalf("write: %v", err)
 	}

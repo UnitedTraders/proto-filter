@@ -244,6 +244,97 @@ func FilterMethodsByAnnotation(def *proto.Proto, annotations []string) int {
 	return removed
 }
 
+// IncludeServicesByAnnotation removes services from the proto AST
+// whose comments contain annotations but NONE of them match the
+// specified include list. Services without any annotations are kept
+// (their methods will be filtered individually by IncludeMethodsByAnnotation).
+// Returns the number of services removed.
+func IncludeServicesByAnnotation(def *proto.Proto, annotations []string) int {
+	if len(annotations) == 0 {
+		return 0
+	}
+	annotSet := make(map[string]bool, len(annotations))
+	for _, a := range annotations {
+		annotSet[a] = true
+	}
+
+	filtered := make([]proto.Visitee, 0, len(def.Elements))
+	removed := 0
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			filtered = append(filtered, elem)
+			continue
+		}
+		annots := ExtractAnnotations(svc.Comment)
+		if len(annots) == 0 {
+			// No service-level annotations: keep the service,
+			// let method-level filtering decide its fate.
+			filtered = append(filtered, elem)
+			continue
+		}
+		hasMatch := false
+		for _, a := range annots {
+			if annotSet[a] {
+				hasMatch = true
+				break
+			}
+		}
+		if hasMatch {
+			filtered = append(filtered, elem)
+		} else {
+			removed++
+		}
+	}
+	def.Elements = filtered
+	return removed
+}
+
+// IncludeMethodsByAnnotation removes RPC methods from services in the
+// given proto AST whose comments do NOT contain any of the specified
+// annotations. This is the inverse of FilterMethodsByAnnotation.
+// Returns the number of methods removed.
+func IncludeMethodsByAnnotation(def *proto.Proto, annotations []string) int {
+	if len(annotations) == 0 {
+		return 0
+	}
+	annotSet := make(map[string]bool, len(annotations))
+	for _, a := range annotations {
+		annotSet[a] = true
+	}
+
+	removed := 0
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			continue
+		}
+		filtered := make([]proto.Visitee, 0, len(svc.Elements))
+		for _, svcElem := range svc.Elements {
+			rpc, ok := svcElem.(*proto.RPC)
+			if !ok {
+				filtered = append(filtered, svcElem)
+				continue
+			}
+			annots := ExtractAnnotations(rpc.Comment)
+			hasMatch := false
+			for _, a := range annots {
+				if annotSet[a] {
+					hasMatch = true
+					break
+				}
+			}
+			if hasMatch {
+				filtered = append(filtered, svcElem)
+			} else {
+				removed++
+			}
+		}
+		svc.Elements = filtered
+	}
+	return removed
+}
+
 // RemoveEmptyServices removes service definitions that have zero RPC
 // method children. Returns the count of removed services.
 func RemoveEmptyServices(def *proto.Proto) int {

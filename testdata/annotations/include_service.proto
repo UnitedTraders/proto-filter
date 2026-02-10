@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package annotations;
+
+service OrderService {
+  // @Public
+  // Creates a new order in the system.
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+
+  // [Public]
+  // Deletes an existing order.
+  rpc DeleteOrder(DeleteOrderRequest) returns (DeleteOrderResponse);
+
+  // Lists all orders for the current user.
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+}
+
+message CreateOrderRequest {
+  string name = 1;
+}
+
+message CreateOrderResponse {
+  string id = 1;
+}
+
+message DeleteOrderRequest {
+  string id = 1;
+}
+
+message DeleteOrderResponse {}
+
+message ListOrdersRequest {
+  int32 page = 1;
+}
+
+message ListOrdersResponse {
+  repeated string ids = 1;
+}
