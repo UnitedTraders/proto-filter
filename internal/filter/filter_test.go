@@ -296,6 +296,18 @@ func TestExtractAnnotations(t *testing.T) {
 		{"mixed lines", []string{" @HasAnyRole({\"ADMIN\"})", " Creates a new order."}, []string{"HasAnyRole"}},
 		{"multiple annotations", []string{" @HasAnyRole", " @Deprecated"}, []string{"HasAnyRole", "Deprecated"}},
 		{"annotation in block comment", []string{" * @HasAnyRole({\"ADMIN\"})", " * Some description"}, []string{"HasAnyRole"}},
+		// Bracket-style annotations (C#-style)
+		{"bracket simple", []string{" [HasAnyRole]"}, []string{"HasAnyRole"}},
+		{"bracket with args", []string{" [HasAnyRole(\"ADMIN\")]"}, []string{"HasAnyRole"}},
+		{"bracket dotted", []string{" [com.example.Secure]"}, []string{"com.example.Secure"}},
+		{"bracket empty", []string{" []"}, nil},
+		{"bracket with leading space", []string{" [ Name ]"}, nil},
+		{"bracket RFC reference", []string{" See [RFC 7231] for details."}, nil},
+		{"bracket error code", []string{" Returns [error code] on failure."}, nil},
+		{"bracket mid-line", []string{" some text [HasAnyRole] more text"}, []string{"HasAnyRole"}},
+		{"bracket with complex args", []string{" [HasAnyRole({\"ADMIN\", \"MANAGER\"})]"}, []string{"HasAnyRole"}},
+		// Mixed styles in same comment
+		{"mixed at and bracket", []string{" @HasAnyRole", " [Deprecated]"}, []string{"HasAnyRole", "Deprecated"}},
 	}
 
 	for _, tc := range tests {
@@ -1338,6 +1350,157 @@ func TestCrossFileCommonFileNoServicesPreserved(t *testing.T) {
 		if !msgSet[expected] {
 			t.Errorf("%s should remain in common.proto (annotation filtering has no effect on service-less files)", expected)
 		}
+	}
+}
+
+// T009: Test method filtering by bracket-style annotation
+func TestFilterMethodsByBracketAnnotation(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "bracket_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	if removed != 2 {
+		t.Errorf("expected 2 methods removed, got %d", removed)
+	}
+
+	var methodNames []string
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodNames = append(methodNames, r.Name)
+	}))
+
+	if len(methodNames) != 1 {
+		t.Fatalf("expected 1 remaining method, got %d: %v", len(methodNames), methodNames)
+	}
+	if methodNames[0] != "ListOrders" {
+		t.Errorf("expected ListOrders, got %s", methodNames[0])
+	}
+}
+
+// T010: Test service filtering by bracket-style annotation
+func TestFilterServicesByBracketAnnotation(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "AdminService",
+				Comment: &proto.Comment{
+					Lines: []string{" [Internal]"},
+				},
+			},
+			&proto.Service{
+				Name: "OrderService",
+			},
+		},
+	}
+
+	removed := FilterServicesByAnnotation(def, []string{"Internal"})
+	if removed != 1 {
+		t.Errorf("expected 1 service removed, got %d", removed)
+	}
+
+	var serviceNames []string
+	proto.Walk(def, proto.WithService(func(s *proto.Service) {
+		serviceNames = append(serviceNames, s.Name)
+	}))
+
+	if len(serviceNames) != 1 || serviceNames[0] != "OrderService" {
+		t.Errorf("expected [OrderService], got %v", serviceNames)
+	}
+}
+
+// T011: Golden file test for bracket_service.proto
+func TestGoldenFileBracketService(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "bracket_service.proto")
+	goldenPath := filepath.Join(testdataDir(t, "annotations"), "expected", "bracket_service.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	RemoveOrphanedDefinitions(def, "annotations")
+	ConvertBlockComments(def)
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "bracket_service.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// T014: Test mixed-style method filtering
+func TestFilterMethodsMixedAnnotationStyles(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "mixed_styles.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	removed := FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	if removed != 2 {
+		t.Errorf("expected 2 methods removed (one @HasAnyRole, one [HasAnyRole]), got %d", removed)
+	}
+
+	var methodNames []string
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodNames = append(methodNames, r.Name)
+	}))
+
+	if len(methodNames) != 1 {
+		t.Fatalf("expected 1 remaining method, got %d: %v", len(methodNames), methodNames)
+	}
+	if methodNames[0] != "ListOrders" {
+		t.Errorf("expected ListOrders, got %s", methodNames[0])
+	}
+}
+
+// T015: Golden file test for mixed_styles.proto
+func TestGoldenFileMixedStyles(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "annotations"), "mixed_styles.proto")
+	goldenPath := filepath.Join(testdataDir(t, "annotations"), "expected", "mixed_styles.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	FilterMethodsByAnnotation(def, []string{"HasAnyRole"})
+	RemoveOrphanedDefinitions(def, "annotations")
+	ConvertBlockComments(def)
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "mixed_styles.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
 	}
 }
 

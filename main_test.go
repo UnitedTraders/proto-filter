@@ -644,3 +644,105 @@ func TestCrossFileGoldenFileComparison(t *testing.T) {
 		t.Error("payments.proto should NOT be in output (no golden file expected)")
 	}
 }
+
+// setupSingleProtoInput copies a single proto file from testdata/annotations to a temp dir
+func setupSingleProtoInput(t *testing.T, name string) string {
+	t.Helper()
+	srcDir := testdataDir(t, "annotations")
+	inputDir := t.TempDir()
+	data, err := os.ReadFile(filepath.Join(srcDir, name))
+	if err != nil {
+		t.Fatalf("read %s: %v", name, err)
+	}
+	if err := os.WriteFile(filepath.Join(inputDir, name), data, 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return inputDir
+}
+
+// T012: CLI integration test for bracket-style annotation filtering
+func TestBracketAnnotationFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "bracket_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"HasAnyRole\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// bracket_service.proto should exist with only ListOrders
+	outFile := filepath.Join(outDir, "bracket_service.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("bracket_service.proto should exist: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "ListOrders") {
+		t.Error("output should contain ListOrders (not annotated)")
+	}
+	if strings.Contains(out, "rpc CreateOrder") {
+		t.Error("output should NOT contain rpc CreateOrder (annotated [HasAnyRole])")
+	}
+	if strings.Contains(out, "rpc DeleteOrder") {
+		t.Error("output should NOT contain rpc DeleteOrder (annotated [HasAnyRole])")
+	}
+	if strings.Contains(out, "CreateOrderRequest") {
+		t.Error("output should NOT contain CreateOrderRequest (orphaned)")
+	}
+}
+
+// T016: CLI integration test for mixed-style annotation filtering
+func TestMixedStyleAnnotationFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "mixed_styles.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  - \"HasAnyRole\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// mixed_styles.proto should exist with only ListOrders
+	outFile := filepath.Join(outDir, "mixed_styles.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("mixed_styles.proto should exist: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "ListOrders") {
+		t.Error("output should contain ListOrders (not annotated)")
+	}
+	if strings.Contains(out, "rpc CreateOrder") {
+		t.Error("output should NOT contain rpc CreateOrder (annotated @HasAnyRole)")
+	}
+	if strings.Contains(out, "rpc DeleteOrder") {
+		t.Error("output should NOT contain rpc DeleteOrder (annotated [HasAnyRole])")
+	}
+	if strings.Contains(out, "CreateOrderRequest") {
+		t.Error("output should NOT contain CreateOrderRequest (orphaned)")
+	}
+	if strings.Contains(out, "DeleteOrderRequest") {
+		t.Error("output should NOT contain DeleteOrderRequest (orphaned)")
+	}
+}

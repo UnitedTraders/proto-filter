@@ -11,7 +11,7 @@ import (
 	"github.com/unitedtraders/proto-filter/internal/config"
 )
 
-var annotationRegex = regexp.MustCompile(`@(\w[\w.]*)`)
+var annotationRegex = regexp.MustCompile(`@(\w[\w.]*)|\[(\w[\w.]*)(?:\([^)]*\))?\]`)
 
 // MatchesAny returns true if fqn matches any of the glob patterns.
 // Dots in FQNs are treated as path separators so that `*` matches
@@ -142,7 +142,7 @@ func PruneAST(def *proto.Proto, pkg string, keepFQNs map[string]bool) {
 }
 
 // ExtractAnnotations returns annotation names found in a proto comment.
-// Annotations follow the pattern @Name or @Name(...).
+// Annotations follow the pattern @Name, @Name(...), [Name], or [Name(...)].
 // Returns nil if comment is nil or contains no annotations.
 func ExtractAnnotations(comment *proto.Comment) []string {
 	if comment == nil {
@@ -152,7 +152,11 @@ func ExtractAnnotations(comment *proto.Comment) []string {
 	for _, line := range comment.Lines {
 		matches := annotationRegex.FindAllStringSubmatch(line, -1)
 		for _, m := range matches {
-			annotations = append(annotations, m[1])
+			if m[1] != "" {
+				annotations = append(annotations, m[1])
+			} else if m[2] != "" {
+				annotations = append(annotations, m[2])
+			}
 		}
 	}
 	return annotations
