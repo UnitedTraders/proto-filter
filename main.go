@@ -177,10 +177,19 @@ func run() int {
 
 		// Annotation-based filtering (service-level then method-level)
 		if cfg != nil && cfg.HasAnnotations() {
-			servicesRemoved += filter.FilterServicesByAnnotation(pf.def, cfg.Annotations)
-			methodsRemoved += filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations)
+			sr := filter.FilterServicesByAnnotation(pf.def, cfg.Annotations)
+			mr := filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations)
+			servicesRemoved += sr
+			methodsRemoved += mr
 			filter.RemoveEmptyServices(pf.def)
-			orphansRemoved += filter.RemoveOrphanedDefinitions(pf.def, pf.pkg)
+			// Only remove orphans if annotation filtering actually removed
+			// something from this file. Files with no services (e.g., common
+			// message-only files) should not have their types removed, as
+			// those types were included by the dependency graph because other
+			// files reference them.
+			if sr > 0 || mr > 0 {
+				orphansRemoved += filter.RemoveOrphanedDefinitions(pf.def, pf.pkg)
+			}
 
 			if !filter.HasRemainingDefinitions(pf.def) {
 				continue

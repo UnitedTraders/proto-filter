@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package crossfile;
+
+import "common.proto";
+
+// Order processing service.
+service OrderService {
+  // List all orders with pagination.
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  // @HasAnyRole({"ADMIN"})
+  // Get details for a specific order.
+  rpc GetOrderDetails(GetOrderDetailsRequest) returns (GetOrderDetailsResponse);
+}
+
+message ListOrdersRequest {
+  Pagination pagination = 1;
+}
+
+message ListOrdersResponse {
+  repeated Money totals = 1;
+}
+
+message GetOrderDetailsRequest {
+  string order_id = 1;
+}
+
+message GetOrderDetailsResponse {
+  string status = 1;
+}

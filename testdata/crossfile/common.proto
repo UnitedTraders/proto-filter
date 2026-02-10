@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package crossfile;
+
+message Pagination {
+  int32 page = 1;
+  int32 per_page = 2;
+}
+
+message Money {
+  string currency = 1;
+  int64 amount = 2;
+}
+
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+}

@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package crossfile;
+
+import "common.proto";
+
+// @Internal
+// Payment processing service for internal use.
+service PaymentService {
+  // Process a payment transaction.
+  rpc ProcessPayment(ProcessPaymentRequest) returns (ProcessPaymentResponse);
+}
+
+message ProcessPaymentRequest {
+  Money amount = 1;
+}
+
+message ProcessPaymentResponse {
+  ErrorDetail error = 1;
+}
