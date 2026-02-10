@@ -1646,6 +1646,385 @@ func TestGoldenFileIncludeService(t *testing.T) {
 	}
 }
 
+// --- Annotation Substitution Tests (Feature 008) ---
+
+// T007: Test SubstituteAnnotations with full mapping
+func TestSubstituteAnnotations(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ConvertBlockComments(def)
+
+	subs := map[string]string{
+		"HasAnyRole": "Requires authentication",
+		"Internal":   "For internal use only",
+		"Public":     "Available to all users",
+	}
+	count := SubstituteAnnotations(def, subs)
+	if count != 3 {
+		t.Errorf("expected 3 substitutions, got %d", count)
+	}
+
+	// Check each RPC's comment
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			continue
+		}
+		for _, svcElem := range svc.Elements {
+			rpc, ok := svcElem.(*proto.RPC)
+			if !ok {
+				continue
+			}
+			lines := strings.Join(rpc.Comment.Lines, "\n")
+			switch rpc.Name {
+			case "CreateOrder":
+				if !strings.Contains(lines, "Requires authentication") {
+					t.Errorf("CreateOrder: expected 'Requires authentication', got: %s", lines)
+				}
+				if strings.Contains(lines, "@HasAnyRole") {
+					t.Errorf("CreateOrder: @HasAnyRole should be replaced")
+				}
+				if !strings.Contains(lines, "Creates a new order") {
+					t.Errorf("CreateOrder: descriptive text should be preserved, got: %s", lines)
+				}
+			case "DeleteOrder":
+				if !strings.Contains(lines, "For internal use only") {
+					t.Errorf("DeleteOrder: expected 'For internal use only', got: %s", lines)
+				}
+				if strings.Contains(lines, "@Internal") {
+					t.Errorf("DeleteOrder: @Internal should be replaced")
+				}
+			case "ListOrders":
+				if !strings.Contains(lines, "Available to all users") {
+					t.Errorf("ListOrders: expected 'Available to all users', got: %s", lines)
+				}
+				if strings.Contains(lines, "[Public]") {
+					t.Errorf("ListOrders: [Public] should be replaced")
+				}
+				if !strings.Contains(lines, "Lists all orders") {
+					t.Errorf("ListOrders: surrounding text should be preserved, got: %s", lines)
+				}
+			}
+		}
+	}
+}
+
+// T008: Test SubstituteAnnotations with empty map
+func TestSubstituteAnnotationsNoMapping(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Capture original comment lines
+	var origLines []string
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			continue
+		}
+		for _, svcElem := range svc.Elements {
+			if rpc, ok := svcElem.(*proto.RPC); ok && rpc.Comment != nil {
+				origLines = append(origLines, rpc.Comment.Lines...)
+			}
+		}
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{})
+	if count != 0 {
+		t.Errorf("expected 0 substitutions with empty map, got %d", count)
+	}
+
+	// Verify lines unchanged
+	var newLines []string
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			continue
+		}
+		for _, svcElem := range svc.Elements {
+			if rpc, ok := svcElem.(*proto.RPC); ok && rpc.Comment != nil {
+				newLines = append(newLines, rpc.Comment.Lines...)
+			}
+		}
+	}
+
+	if len(origLines) != len(newLines) {
+		t.Fatalf("line count changed: %d → %d", len(origLines), len(newLines))
+	}
+	for i := range origLines {
+		if origLines[i] != newLines[i] {
+			t.Errorf("line %d changed: %q → %q", i, origLines[i], newLines[i])
+		}
+	}
+}
+
+// T009: Test SubstituteAnnotations with partial mapping
+func TestSubstituteAnnotationsPartialMapping(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"HasAnyRole": "Auth required",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	// Verify HasAnyRole is substituted
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			continue
+		}
+		for _, svcElem := range svc.Elements {
+			rpc, ok := svcElem.(*proto.RPC)
+			if !ok {
+				continue
+			}
+			if rpc.Comment == nil {
+				continue
+			}
+			lines := strings.Join(rpc.Comment.Lines, "\n")
+			switch rpc.Name {
+			case "CreateOrder":
+				if !strings.Contains(lines, "Auth required") {
+					t.Errorf("CreateOrder: expected 'Auth required', got: %s", lines)
+				}
+			case "DeleteOrder":
+				if !strings.Contains(lines, "@Internal") {
+					t.Errorf("DeleteOrder: @Internal should be unchanged, got: %s", lines)
+				}
+			case "ListOrders":
+				if !strings.Contains(lines, "[Public]") {
+					t.Errorf("ListOrders: [Public] should be unchanged, got: %s", lines)
+				}
+			}
+		}
+	}
+}
+
+// T015: Test SubstituteAnnotations with empty removal
+func TestSubstituteAnnotationsEmptyRemoval(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"HasAnyRole": "",
+		"Internal":   "",
+		"Public":     "",
+	})
+	if count != 3 {
+		t.Errorf("expected 3 substitutions, got %d", count)
+	}
+
+	for _, elem := range def.Elements {
+		svc, ok := elem.(*proto.Service)
+		if !ok {
+			continue
+		}
+		for _, svcElem := range svc.Elements {
+			rpc, ok := svcElem.(*proto.RPC)
+			if !ok {
+				continue
+			}
+			switch rpc.Name {
+			case "CreateOrder":
+				// Should retain "Creates a new order in the system." only
+				if rpc.Comment == nil {
+					t.Error("CreateOrder: comment should not be nil (has descriptive text)")
+					continue
+				}
+				lines := strings.Join(rpc.Comment.Lines, "\n")
+				if strings.Contains(lines, "@HasAnyRole") {
+					t.Errorf("CreateOrder: annotation should be removed")
+				}
+				if !strings.Contains(lines, "Creates a new order") {
+					t.Errorf("CreateOrder: descriptive text should be preserved, got: %s", lines)
+				}
+			case "DeleteOrder":
+				// @Internal was the only line — comment should be nil
+				if rpc.Comment != nil {
+					t.Errorf("DeleteOrder: comment should be nil (only had annotation), got lines: %v", rpc.Comment.Lines)
+				}
+			case "ListOrders":
+				// "[Public] Lists all orders." → "Lists all orders."
+				if rpc.Comment == nil {
+					t.Error("ListOrders: comment should not be nil (has surrounding text)")
+					continue
+				}
+				lines := strings.Join(rpc.Comment.Lines, "\n")
+				if strings.Contains(lines, "[Public]") || strings.Contains(lines, "Public") {
+					t.Errorf("ListOrders: annotation should be removed, got: %s", lines)
+				}
+				if !strings.Contains(lines, "Lists all orders") {
+					t.Errorf("ListOrders: surrounding text should be preserved, got: %s", lines)
+				}
+			}
+		}
+	}
+}
+
+// T016: Test full comment removal when only annotation exists
+func TestSubstituteAnnotationsFullCommentRemoval(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "InternalMethod",
+						Comment: &proto.Comment{
+							Lines: []string{" @Internal"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{"Internal": ""})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment != nil {
+		t.Errorf("comment should be nil when all lines removed, got: %v", rpc.Comment.Lines)
+	}
+}
+
+// T021: Test CollectAllAnnotations
+func TestCollectAllAnnotations(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	result := CollectAllAnnotations(def)
+
+	expected := []string{"HasAnyRole", "Internal", "Public"}
+	for _, name := range expected {
+		if !result[name] {
+			t.Errorf("expected annotation %q to be collected", name)
+		}
+	}
+	if len(result) != 3 {
+		t.Errorf("expected 3 unique annotations, got %d: %v", len(result), result)
+	}
+}
+
+// T022: Test CollectAllAnnotations with no annotations
+func TestCollectAllAnnotationsEmpty(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "PlainService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "GetData",
+						Comment: &proto.Comment{
+							Lines: []string{" Returns data for the user."},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result := CollectAllAnnotations(def)
+	if len(result) != 0 {
+		t.Errorf("expected 0 annotations, got %d: %v", len(result), result)
+	}
+}
+
+// T010: Golden file test for substitution replacement
+func TestGoldenFileSubstitutionReplaced(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	goldenPath := filepath.Join(testdataDir(t, "substitution"), "expected", "substitution_replaced.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ConvertBlockComments(def)
+	SubstituteAnnotations(def, map[string]string{
+		"HasAnyRole": "Requires authentication",
+		"Internal":   "For internal use only",
+		"Public":     "Available to all users",
+	})
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "substitution_replaced.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// T017: Golden file test for substitution removal
+func TestGoldenFileSubstitutionRemoved(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	goldenPath := filepath.Join(testdataDir(t, "substitution"), "expected", "substitution_removed.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ConvertBlockComments(def)
+	SubstituteAnnotations(def, map[string]string{
+		"HasAnyRole": "",
+		"Internal":   "",
+		"Public":     "",
+	})
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "substitution_removed.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))

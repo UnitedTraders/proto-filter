@@ -648,16 +648,21 @@ func TestCrossFileGoldenFileComparison(t *testing.T) {
 // setupSingleProtoInput copies a single proto file from testdata/annotations to a temp dir
 func setupSingleProtoInput(t *testing.T, name string) string {
 	t.Helper()
-	srcDir := testdataDir(t, "annotations")
-	inputDir := t.TempDir()
-	data, err := os.ReadFile(filepath.Join(srcDir, name))
-	if err != nil {
-		t.Fatalf("read %s: %v", name, err)
+	// Try annotations dir first, then substitution dir
+	for _, sub := range []string{"annotations", "substitution"} {
+		srcPath := filepath.Join(testdataDir(t, sub), name)
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			continue
+		}
+		inputDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(inputDir, name), data, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		return inputDir
 	}
-	if err := os.WriteFile(filepath.Join(inputDir, name), data, 0o644); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
-	return inputDir
+	t.Fatalf("proto file %s not found in testdata", name)
+	return ""
 }
 
 // T012: CLI integration test for bracket-style annotation filtering
@@ -823,6 +828,253 @@ func TestStructuredExcludeAnnotationFilteringCLI(t *testing.T) {
 	}
 	if strings.Contains(out, "rpc DeleteOrder") {
 		t.Error("output should NOT contain rpc DeleteOrder (annotated @HasAnyRole)")
+	}
+}
+
+// --- Annotation Substitution CLI Tests (Feature 008) ---
+
+// T013 (008): CLI integration test for substitution replacement
+func TestSubstitutionReplacementCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "substitution_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`substitutions:
+  HasAnyRole: "Requires authentication"
+  Internal: "For internal use only"
+  Public: "Available to all users"
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outFile := filepath.Join(outDir, "substitution_service.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("output file missing: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "Requires authentication") {
+		t.Error("output should contain 'Requires authentication'")
+	}
+	if !strings.Contains(out, "For internal use only") {
+		t.Error("output should contain 'For internal use only'")
+	}
+	if !strings.Contains(out, "Available to all users") {
+		t.Error("output should contain 'Available to all users'")
+	}
+	if strings.Contains(out, "@HasAnyRole") {
+		t.Error("output should NOT contain @HasAnyRole")
+	}
+	if strings.Contains(out, "@Internal") {
+		t.Error("output should NOT contain @Internal")
+	}
+	if strings.Contains(out, "[Public]") {
+		t.Error("output should NOT contain [Public]")
+	}
+	if !strings.Contains(stderr, "substituted") {
+		t.Errorf("verbose output should contain 'substituted', got: %s", stderr)
+	}
+}
+
+// T020 (008): CLI integration test for empty substitution removal
+func TestSubstitutionEmptyRemovalCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "substitution_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`substitutions:
+  HasAnyRole: ""
+  Internal: ""
+  Public: ""
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outFile := filepath.Join(outDir, "substitution_service.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("output file missing: %v", err)
+	}
+	out := string(content)
+
+	if strings.Contains(out, "@HasAnyRole") {
+		t.Error("output should NOT contain @HasAnyRole")
+	}
+	if strings.Contains(out, "@Internal") {
+		t.Error("output should NOT contain @Internal")
+	}
+	if strings.Contains(out, "[Public]") {
+		t.Error("output should NOT contain [Public]")
+	}
+	// Descriptive text should remain
+	if !strings.Contains(out, "Creates a new order") {
+		t.Error("output should contain 'Creates a new order'")
+	}
+	if !strings.Contains(out, "Lists all orders") {
+		t.Error("output should contain 'Lists all orders'")
+	}
+}
+
+// T027 (008): CLI integration test for strict substitution error
+func TestStrictSubstitutionErrorCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "substitution_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`substitutions:
+  HasAnyRole: "Auth required"
+strict_substitutions: true
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "unsubstituted annotations") {
+		t.Errorf("stderr should contain 'unsubstituted annotations', got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "Internal") {
+		t.Errorf("stderr should list 'Internal' as missing, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "Public") {
+		t.Errorf("stderr should list 'Public' as missing, got: %s", stderr)
+	}
+
+	// No output files should be written
+	outFile := filepath.Join(outDir, "substitution_service.proto")
+	if _, err := os.Stat(outFile); err == nil {
+		t.Error("no output files should be written on strict failure")
+	}
+}
+
+// T028 (008): CLI integration test for strict substitution success
+func TestStrictSubstitutionSuccessCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "substitution_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`substitutions:
+  HasAnyRole: "Auth required"
+  Internal: "Internal only"
+  Public: "Public API"
+strict_substitutions: true
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outFile := filepath.Join(outDir, "substitution_service.proto")
+	if _, err := os.Stat(outFile); err != nil {
+		t.Error("output file should be written on strict success")
+	}
+}
+
+// T029 (008): CLI integration test for strict mode with no annotations
+func TestStrictSubstitutionNoAnnotationsCLI(t *testing.T) {
+	bin := buildBinary(t)
+	// Create a proto file with no annotations
+	inputDir := t.TempDir()
+	os.WriteFile(filepath.Join(inputDir, "plain.proto"), []byte(`syntax = "proto3";
+package plain;
+message Foo { string bar = 1; }
+`), 0o644)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`strict_substitutions: true
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Errorf("expected exit code 0 (no annotations to flag), got %d; stderr: %s", code, stderr)
+	}
+}
+
+// T032 (008): CLI integration test for substitution with annotation filtering
+func TestSubstitutionWithAnnotationFilterCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "substitution_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`annotations:
+  exclude:
+    - "Internal"
+substitutions:
+  HasAnyRole: "Auth required"
+  Public: "Public API"
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outFile := filepath.Join(outDir, "substitution_service.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("output file missing: %v", err)
+	}
+	out := string(content)
+
+	// Internal method should be removed entirely
+	if strings.Contains(out, "DeleteOrder") {
+		t.Error("output should NOT contain DeleteOrder (filtered by @Internal)")
+	}
+	// HasAnyRole should be substituted
+	if !strings.Contains(out, "Auth required") {
+		t.Error("output should contain 'Auth required' (substituted)")
+	}
+	if strings.Contains(out, "@HasAnyRole") {
+		t.Error("output should NOT contain @HasAnyRole (substituted)")
+	}
+	// Public should be substituted
+	if !strings.Contains(out, "Public API") {
+		t.Error("output should contain 'Public API' (substituted)")
 	}
 }
 

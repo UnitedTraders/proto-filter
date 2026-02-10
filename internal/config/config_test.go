@@ -250,3 +250,71 @@ func TestValidateNoAnnotationsPass(t *testing.T) {
 		t.Errorf("expected no error with no annotations, got: %v", err)
 	}
 }
+
+// T023 (008): Test config loading with substitutions
+func TestLoadConfigWithSubstitutions(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "filter.yaml")
+
+	content := `substitutions:
+  HasAnyRole: "Auth"
+  Internal: ""
+strict_substitutions: true
+`
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.Substitutions) != 2 {
+		t.Errorf("expected 2 substitutions, got %d", len(cfg.Substitutions))
+	}
+	if cfg.Substitutions["HasAnyRole"] != "Auth" {
+		t.Errorf("HasAnyRole: expected 'Auth', got %q", cfg.Substitutions["HasAnyRole"])
+	}
+	if cfg.Substitutions["Internal"] != "" {
+		t.Errorf("Internal: expected empty string, got %q", cfg.Substitutions["Internal"])
+	}
+	if !cfg.StrictSubstitutions {
+		t.Error("StrictSubstitutions should be true")
+	}
+	if !cfg.HasSubstitutions() {
+		t.Error("HasSubstitutions should return true")
+	}
+}
+
+// T024 (008): Test config loading without substitutions
+func TestLoadConfigNoSubstitutions(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "filter.yaml")
+
+	content := `include:
+  - "my.package.*"
+`
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Substitutions != nil && len(cfg.Substitutions) > 0 {
+		t.Errorf("expected nil/empty substitutions, got %v", cfg.Substitutions)
+	}
+	if cfg.StrictSubstitutions {
+		t.Error("StrictSubstitutions should be false")
+	}
+	if cfg.HasSubstitutions() {
+		t.Error("HasSubstitutions should return false")
+	}
+}
+
+// Test IsPassThrough is not affected by substitutions
+func TestIsPassThroughNotAffectedBySubstitutions(t *testing.T) {
+	cfg := FilterConfig{
+		Substitutions: map[string]string{"HasAnyRole": "Auth"},
+	}
+	if !cfg.IsPassThrough() {
+		t.Error("substitution-only config should be pass-through (writes all files)")
+	}
+}
