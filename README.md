@@ -123,6 +123,100 @@ exclude:
 
 **Transitive dependencies** are resolved automatically. If you include a service, all its request/response message types and their dependencies are included.
 
+### Annotation filtering
+
+Filter services and methods based on annotations in their comments. Annotations use `@Name` or `[Name]` syntax.
+
+```yaml
+# Exclude mode: remove elements with these annotations
+exclude:
+  - "Internal"
+  - "HasAnyRole"
+
+# Include mode: keep only elements with these annotations
+include:
+  - "Public"
+```
+
+`exclude` and `include` are mutually exclusive.
+
+### Annotation substitution
+
+Replace annotation markers in comments with human-readable descriptions. This is useful for producing documentation-friendly proto files where implementation annotations are replaced with descriptive text.
+
+```yaml
+substitutions:
+  HasAnyRole: "Requires authentication"
+  Internal: "For internal use only"
+  Public: "Available to all users"
+```
+
+Given a proto file:
+
+```protobuf
+service OrderService {
+  // @HasAnyRole({"ADMIN", "MANAGER"})
+  // Creates a new order in the system.
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+
+  // @Internal
+  rpc DeleteOrder(DeleteOrderRequest) returns (DeleteOrderResponse);
+
+  // [Public] Lists all orders.
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+}
+```
+
+The output will be:
+
+```protobuf
+service OrderService {
+  // Requires authentication
+  // Creates a new order in the system.
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+
+  // For internal use only
+  rpc DeleteOrder(DeleteOrderRequest) returns (DeleteOrderResponse);
+
+  // Available to all users Lists all orders.
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+}
+```
+
+Both `@Name(...)` and `[Name(...)]` syntax are supported. Surrounding text on the same line is preserved.
+
+**Empty substitutions** remove annotations entirely. Use an empty string to strip annotation markers without replacing them:
+
+```yaml
+substitutions:
+  HasAnyRole: ""
+  Internal: ""
+```
+
+Annotation-only comment lines are removed. If all lines in a comment are removed, the comment is dropped from the element.
+
+**Strict mode** enforces that every annotation in the input has a substitution mapping. Enable it to catch annotations you forgot to map:
+
+```yaml
+substitutions:
+  HasAnyRole: "Requires authentication"
+strict_substitutions: true
+```
+
+If any annotation in the processed files lacks a mapping, the tool exits with code 2 and lists the missing annotations on stderr. No output files are written.
+
+**Combined with annotation filtering**: substitution and annotation include/exclude work together. Filtering removes elements first, then substitution replaces annotations on surviving elements:
+
+```yaml
+annotations:
+  exclude:
+    - "Internal"
+substitutions:
+  HasAnyRole: "Requires authentication"
+```
+
+Methods annotated with `@Internal` are removed; `@HasAnyRole` on remaining methods is replaced with the description text.
+
 ## How it works
 
 1. Recursively discovers all `*.proto` files in the input directory
@@ -140,7 +234,7 @@ External imports (e.g., `google/protobuf/timestamp.proto`) are passed through as
 |------|---------|
 | 0 | Success |
 | 1 | Runtime error (missing directory, parse failure, I/O error) |
-| 2 | Configuration error (invalid YAML, conflicting filter rules) |
+| 2 | Configuration error (invalid YAML, conflicting filter rules, unsubstituted annotations in strict mode) |
 
 ## Development
 
