@@ -24,9 +24,9 @@ tests/
 Go 1.23+: Follow standard conventions
 
 ## Recent Changes
+- 006-csharp-annotation-syntax: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `github.com/emicklei/proto-contrib` v0.18.3, `gopkg.in/yaml.v3`
 - 005-cross-file-orphan-tests: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `github.com/emicklei/proto-contrib` v0.18.3, `gopkg.in/yaml.v3`
 - 004-service-annotation-filter: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `github.com/emicklei/proto-contrib` v0.18.3, `gopkg.in/yaml.v3`
-- 003-comment-conversion: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `github.com/emicklei/proto-contrib` v0.18.3
 
 
 <!-- MANUAL ADDITIONS START -->
