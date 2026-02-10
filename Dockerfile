@@ -9,4 +9,4 @@ RUN CGO_ENABLED=0 go build -o /proto-filter .
 FROM alpine:3.21
 COPY --from=builder /proto-filter /usr/local/bin/proto-filter
 ENTRYPOINT ["proto-filter"]
-CMD ["--input", "/input", "--output", "/output", "--config", "/filter.yaml"]
+CMD ["--input", "/input", "--output", "/output", "--config", "/filter.yaml", "--verbose"]
