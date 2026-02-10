@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/emicklei/proto"
 
@@ -166,11 +167,17 @@ func run() int {
 		}
 	}
 
-	// Prune and write
-	writtenCount := 0
+	// Pass 1: Prune, filter, convert block comments, collect annotations
+	type processedFile struct {
+		pf  parsedFile
+		skip bool // true if file has no remaining definitions after filtering
+	}
+	processed := make([]processedFile, 0, len(parsed))
 	servicesRemoved := 0
 	methodsRemoved := 0
 	orphansRemoved := 0
+	allAnnotations := make(map[string]bool)
+
 	for _, pf := range parsed {
 		if !filesToWrite[pf.rel] {
 			continue
@@ -179,41 +186,72 @@ func run() int {
 			filter.PruneAST(pf.def, pf.pkg, keepFQNs)
 		}
 
+		skip := false
 		// Annotation-based filtering
 		if cfg != nil && cfg.HasAnnotations() {
 			var sr, mr int
 			if cfg.HasAnnotationExclude() {
-				// Exclude mode: remove services first, then methods
 				sr = filter.FilterServicesByAnnotation(pf.def, cfg.Annotations.Exclude)
 				mr = filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations.Exclude)
 			} else if cfg.HasAnnotationInclude() {
-				// Include mode: filter methods first, then services
 				mr = filter.IncludeMethodsByAnnotation(pf.def, cfg.Annotations.Include)
 				sr = filter.IncludeServicesByAnnotation(pf.def, cfg.Annotations.Include)
 			}
 			servicesRemoved += sr
 			methodsRemoved += mr
 			filter.RemoveEmptyServices(pf.def)
-			// Only remove orphans if annotation filtering actually removed
-			// something from this file. Files with no services (e.g., common
-			// message-only files) should not have their types removed, as
-			// those types were included by the dependency graph because other
-			// files reference them.
 			if sr > 0 || mr > 0 {
 				orphansRemoved += filter.RemoveOrphanedDefinitions(pf.def, pf.pkg)
 			}
 
 			if !filter.HasRemainingDefinitions(pf.def) {
-				continue
+				skip = true
 			}
 		}
 
 		// Convert block comments to single-line style
 		filter.ConvertBlockComments(pf.def)
 
-		outPath := filepath.Join(absOutput, pf.rel)
-		if err := writer.WriteProtoFile(pf.def, outPath); err != nil {
-			fmt.Fprintf(os.Stderr, "proto-filter: error: writing %s: %v\n", pf.rel, err)
+		// Collect annotations for strict mode check
+		if cfg != nil && cfg.StrictSubstitutions {
+			for name := range filter.CollectAllAnnotations(pf.def) {
+				allAnnotations[name] = true
+			}
+		}
+
+		processed = append(processed, processedFile{pf: pf, skip: skip})
+	}
+
+	// Strict substitution check: fail if any annotations lack a mapping
+	if cfg != nil && cfg.StrictSubstitutions && len(allAnnotations) > 0 {
+		var missing []string
+		for name := range allAnnotations {
+			if _, ok := cfg.Substitutions[name]; !ok {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			fmt.Fprintf(os.Stderr, "proto-filter: error: unsubstituted annotations found: %s\n", joinNames(missing))
+			return 2
+		}
+	}
+
+	// Pass 2: Substitute annotations and write output
+	writtenCount := 0
+	substitutionCount := 0
+	for _, pf := range processed {
+		if pf.skip {
+			continue
+		}
+
+		if cfg != nil && cfg.HasSubstitutions() {
+			substitutionCount += filter.SubstituteAnnotations(pf.pf.def, cfg.Substitutions)
+		}
+
+		outPath := filepath.Join(absOutput, pf.pf.rel)
+		if err := writer.WriteProtoFile(pf.pf.def, outPath); err != nil {
+			fmt.Fprintf(os.Stderr, "proto-filter: error: writing %s: %v\n", pf.pf.rel, err)
 			return 1
 		}
 		writtenCount++
@@ -225,8 +263,22 @@ func run() int {
 		if cfg != nil && cfg.HasAnnotations() {
 			fmt.Fprintf(os.Stderr, "proto-filter: removed %d services by annotation, %d methods by annotation, %d orphaned definitions\n", servicesRemoved, methodsRemoved, orphansRemoved)
 		}
+		if cfg != nil && cfg.HasSubstitutions() {
+			fmt.Fprintf(os.Stderr, "proto-filter: substituted %d annotations\n", substitutionCount)
+		}
 		fmt.Fprintf(os.Stderr, "proto-filter: wrote %d files to %s\n", writtenCount, *outputDir)
 	}
 
 	return 0
+}
+
+func joinNames(names []string) string {
+	result := ""
+	for i, name := range names {
+		if i > 0 {
+			result += ", "
+		}
+		result += name
+	}
+	return result
 }

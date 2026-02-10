@@ -12,6 +12,7 @@ import (
 )
 
 var annotationRegex = regexp.MustCompile(`@(\w[\w.]*)|\[(\w[\w.]*)(?:\([^)]*\))?\]`)
+var substitutionRegex = regexp.MustCompile(`@(\w[\w.]*)(?:\([^)]*\))?|\[(\w[\w.]*)(?:\([^)]*\))?\]`)
 
 // MatchesAny returns true if fqn matches any of the glob patterns.
 // Dots in FQNs are treated as path separators so that `*` matches
@@ -548,6 +549,147 @@ func cleanBlockCommentLine(line string) string {
 		return trimmed[1:]
 	}
 	return trimmed
+}
+
+// SubstituteAnnotations replaces annotation tokens in comments across the
+// proto AST using the provided substitutions map. For each annotation found,
+// if its name exists in the map, the full annotation token is replaced with
+// the mapped description text. Empty description values cause the annotation
+// token to be removed; if all content is removed from a comment line, the
+// line is dropped; if all lines are dropped, the comment is set to nil on the
+// element. Returns the total count of substitutions made.
+func SubstituteAnnotations(def *proto.Proto, substitutions map[string]string) int {
+	if len(substitutions) == 0 {
+		return 0
+	}
+	count := 0
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Service:
+			count += substituteInComment(&v.Comment, substitutions)
+			for _, svcElem := range v.Elements {
+				if rpc, ok := svcElem.(*proto.RPC); ok {
+					count += substituteInComment(&rpc.Comment, substitutions)
+					count += substituteInComment(&rpc.InlineComment, substitutions)
+				}
+			}
+		case *proto.Message:
+			count += substituteInComment(&v.Comment, substitutions)
+			for _, mElem := range v.Elements {
+				switch f := mElem.(type) {
+				case *proto.NormalField:
+					count += substituteInComment(&f.Comment, substitutions)
+					count += substituteInComment(&f.InlineComment, substitutions)
+				case *proto.MapField:
+					count += substituteInComment(&f.Comment, substitutions)
+					count += substituteInComment(&f.InlineComment, substitutions)
+				case *proto.OneOfField:
+					count += substituteInComment(&f.Comment, substitutions)
+					count += substituteInComment(&f.InlineComment, substitutions)
+				}
+			}
+		case *proto.Enum:
+			count += substituteInComment(&v.Comment, substitutions)
+			for _, eElem := range v.Elements {
+				if ef, ok := eElem.(*proto.EnumField); ok {
+					count += substituteInComment(&ef.Comment, substitutions)
+					count += substituteInComment(&ef.InlineComment, substitutions)
+				}
+			}
+		}
+	}
+	return count
+}
+
+// substituteInComment performs annotation substitution on a single comment.
+// Accepts a pointer-to-pointer so the comment can be set to nil if all lines
+// are removed.
+func substituteInComment(cp **proto.Comment, substitutions map[string]string) int {
+	if cp == nil || *cp == nil {
+		return 0
+	}
+	c := *cp
+	count := 0
+	var cleaned []string
+	for _, line := range c.Lines {
+		newLine := substitutionRegex.ReplaceAllStringFunc(line, func(match string) string {
+			// Parse the match to extract annotation name
+			submatch := substitutionRegex.FindStringSubmatch(match)
+			name := submatch[1]
+			if name == "" {
+				name = submatch[2]
+			}
+			if replacement, ok := substitutions[name]; ok {
+				count++
+				return replacement
+			}
+			return match
+		})
+		// Trim the line
+		trimmed := strings.TrimSpace(newLine)
+		if trimmed == "" {
+			// Line became empty after substitution — drop it
+			continue
+		}
+		cleaned = append(cleaned, " "+trimmed)
+	}
+	if len(cleaned) == 0 {
+		*cp = nil
+	} else {
+		c.Lines = cleaned
+	}
+	return count
+}
+
+// CollectAllAnnotations walks all elements in the proto AST and collects all
+// unique annotation names from comments. Returns a map of annotation names.
+func CollectAllAnnotations(def *proto.Proto) map[string]bool {
+	result := make(map[string]bool)
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Service:
+			collectAnnotationsFromComment(v.Comment, result)
+			for _, svcElem := range v.Elements {
+				if rpc, ok := svcElem.(*proto.RPC); ok {
+					collectAnnotationsFromComment(rpc.Comment, result)
+					collectAnnotationsFromComment(rpc.InlineComment, result)
+				}
+			}
+		case *proto.Message:
+			collectAnnotationsFromComment(v.Comment, result)
+			for _, mElem := range v.Elements {
+				switch f := mElem.(type) {
+				case *proto.NormalField:
+					collectAnnotationsFromComment(f.Comment, result)
+					collectAnnotationsFromComment(f.InlineComment, result)
+				case *proto.MapField:
+					collectAnnotationsFromComment(f.Comment, result)
+					collectAnnotationsFromComment(f.InlineComment, result)
+				case *proto.OneOfField:
+					collectAnnotationsFromComment(f.Comment, result)
+					collectAnnotationsFromComment(f.InlineComment, result)
+				}
+			}
+		case *proto.Enum:
+			collectAnnotationsFromComment(v.Comment, result)
+			for _, eElem := range v.Elements {
+				if ef, ok := eElem.(*proto.EnumField); ok {
+					collectAnnotationsFromComment(ef.Comment, result)
+					collectAnnotationsFromComment(ef.InlineComment, result)
+				}
+			}
+		}
+	}
+	return result
+}
+
+func collectAnnotationsFromComment(c *proto.Comment, result map[string]bool) {
+	if c == nil {
+		return
+	}
+	for _, name := range ExtractAnnotations(c) {
+		result[name] = true
+	}
 }
 
 func qualifiedName(pkg, name string) string {

@@ -45,9 +45,11 @@ func (a *AnnotationConfig) UnmarshalYAML(value *yaml.Node) error {
 
 // FilterConfig holds include/exclude glob patterns and annotation filters.
 type FilterConfig struct {
-	Include     []string         `yaml:"include"`
-	Exclude     []string         `yaml:"exclude"`
-	Annotations AnnotationConfig `yaml:"annotations"`
+	Include              []string          `yaml:"include"`
+	Exclude              []string          `yaml:"exclude"`
+	Annotations          AnnotationConfig  `yaml:"annotations"`
+	Substitutions        map[string]string `yaml:"substitutions"`
+	StrictSubstitutions  bool              `yaml:"strict_substitutions"`
 }
 
 // LoadConfig reads and parses a YAML filter configuration file.
@@ -94,4 +96,9 @@ func (c *FilterConfig) HasAnnotationInclude() bool {
 // HasAnnotationExclude returns true if annotation exclude mode is configured.
 func (c *FilterConfig) HasAnnotationExclude() bool {
 	return len(c.Annotations.Exclude) > 0
+}
+
+// HasSubstitutions returns true if annotation substitutions are configured.
+func (c *FilterConfig) HasSubstitutions() bool {
+	return len(c.Substitutions) > 0
 }
