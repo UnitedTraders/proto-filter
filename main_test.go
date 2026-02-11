@@ -1402,7 +1402,7 @@ message CreateOrderResponse {}
 	}
 }
 
-func TestMutualExclusivityErrorCLI(t *testing.T) {
+func TestCombinedIncludeExcludeCLI(t *testing.T) {
 	bin := buildBinary(t)
 	outDir := t.TempDir()
 	cfgDir := t.TempDir()
@@ -1415,10 +1415,420 @@ func TestMutualExclusivityErrorCLI(t *testing.T) {
 		"--output", outDir,
 		"--config", cfgPath,
 	)
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+}
+
+// T020 (011): CLI integration test for combined include+exclude
+func TestCombinedIncludeExcludeCLIFiltering(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package combined;
+
+// [PublicApi]
+service OrderService {
+  rpc ListOrders(Empty) returns (ListOrdersResponse);
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+}
+
+// [Internal]
+service InternalService {
+  rpc InternalMethod(Empty) returns (Empty);
+}
+
+message Empty {}
+
+message ListOrdersResponse {
+  repeated string orders = 1;
+  // [Deprecated]
+  uint64 index = 2;
+}
+
+message GetOrderRequest {
+  uint64 id = 1;
+}
+
+message GetOrderResponse {
+  uint64 id = 1;
+  string name = 2;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"PublicApi\"\n  exclude:\n    - \"Deprecated\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outData, err := os.ReadFile(filepath.Join(outDir, "service.proto"))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	output := string(outData)
+
+	// OrderService should be included (has PublicApi)
+	if !strings.Contains(output, "OrderService") {
+		t.Errorf("output should contain OrderService, got:\n%s", output)
+	}
+	// InternalService should be excluded (has [Internal], not [PublicApi])
+	if strings.Contains(output, "InternalService") {
+		t.Errorf("output should not contain InternalService (not in include list), got:\n%s", output)
+	}
+	// Deprecated field should be removed
+	if strings.Contains(output, "index") {
+		t.Errorf("output should not contain deprecated field 'index', got:\n%s", output)
+	}
+	// ListOrders and GetOrder should remain
+	if !strings.Contains(output, "ListOrders") {
+		t.Errorf("output should contain ListOrders, got:\n%s", output)
+	}
+	if !strings.Contains(output, "GetOrder") {
+		t.Errorf("output should contain GetOrder, got:\n%s", output)
+	}
+}
+
+// T021 (011): CLI test — combined include+exclude with method removal
+func TestCombinedIncludeExcludeMethodRemovalCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package methodtest;
+
+// [PublicApi]
+service UserService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  // [Deprecated]
+  rpc GetUserLegacy(GetUserRequest) returns (GetUserResponse);
+}
+
+message GetUserRequest {
+  uint64 id = 1;
+}
+
+message GetUserResponse {
+  string name = 1;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"PublicApi\"\n  exclude:\n    - \"Deprecated\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outData, err := os.ReadFile(filepath.Join(outDir, "service.proto"))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	output := string(outData)
+
+	if !strings.Contains(output, "GetUser") {
+		t.Errorf("output should contain GetUser, got:\n%s", output)
+	}
+	if strings.Contains(output, "GetUserLegacy") {
+		t.Errorf("output should not contain deprecated method GetUserLegacy, got:\n%s", output)
+	}
+}
+
+// T022 (011): CLI test — combined config with verbose output includes "fields by annotation"
+func TestCombinedIncludeExcludeVerboseCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package verbosetest;
+
+// [PublicApi]
+service Svc {
+  rpc M(Req) returns (Resp);
+}
+
+message Req {
+  uint64 id = 1;
+}
+
+message Resp {
+  string name = 1;
+  // [Deprecated]
+  string old = 2;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"PublicApi\"\n  exclude:\n    - \"Deprecated\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+		"--verbose",
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	if !strings.Contains(stderr, "fields by annotation") {
+		t.Errorf("verbose output should contain 'fields by annotation', got:\n%s", stderr)
+	}
+}
+
+// T012 (011): CLI integration test for field-level annotation filtering
+func TestFieldFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	// Create proto with a message containing a deprecated field
+	protoContent := `syntax = "proto3";
+package fieldtest;
+
+service TestService {
+  rpc GetItem(GetItemRequest) returns (GetItemResponse);
+}
+
+message GetItemRequest {
+  uint64 id = 1;
+}
+
+message GetItemResponse {
+  string name = 1;
+  // [Deprecated]
+  string old_field = 2;
+  string active_field = 3;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "field_test.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  exclude:\n    - \"Deprecated\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Read output and verify deprecated field is removed
+	outData, err := os.ReadFile(filepath.Join(outDir, "field_test.proto"))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	output := string(outData)
+	if strings.Contains(output, "old_field") {
+		t.Errorf("output should not contain deprecated field 'old_field', got:\n%s", output)
+	}
+	if !strings.Contains(output, "active_field") {
+		t.Errorf("output should contain 'active_field', got:\n%s", output)
+	}
+	if !strings.Contains(output, "name") {
+		t.Errorf("output should contain 'name', got:\n%s", output)
+	}
+}
+
+// T029 (011): Exclude-only config with field-level filtering
+func TestExcludeOnlyWithFieldFilteringCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package exclfieldtest;
+
+service UserService {
+  rpc GetUser(GetUserRequest) returns (UserProfile);
+}
+
+message GetUserRequest {
+  uint64 id = 1;
+}
+
+message UserProfile {
+  string name = 1;
+  // @Deprecated
+  string legacy_email = 2;
+  string email = 3;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  exclude:\n    - \"Deprecated\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outData, err := os.ReadFile(filepath.Join(outDir, "service.proto"))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	output := string(outData)
+
+	if strings.Contains(output, "legacy_email") {
+		t.Errorf("output should not contain deprecated field 'legacy_email', got:\n%s", output)
+	}
+	if !strings.Contains(output, "email") {
+		t.Errorf("output should contain 'email', got:\n%s", output)
+	}
+	if !strings.Contains(output, "name") {
+		t.Errorf("output should contain 'name', got:\n%s", output)
+	}
+	if !strings.Contains(output, "UserService") {
+		t.Errorf("output should contain 'UserService', got:\n%s", output)
+	}
+}
+
+// T031 (011): Combined filtering with substitutions
+func TestCombinedWithSubstitutionCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package subtest;
+
+// [PublicApi]
+service OrderService {
+  // @HasAnyRole(ADMIN)
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+}
+
+message CreateOrderRequest {
+  string name = 1;
+}
+
+message CreateOrderResponse {
+  uint64 id = 1;
+  // [Deprecated]
+  string old_field = 2;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgContent := `annotations:
+  include:
+    - "PublicApi"
+  exclude:
+    - "Deprecated"
+substitutions:
+  PublicApi: ""
+  HasAnyRole: "Requires role: %s"
+`
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(cfgContent), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outData, err := os.ReadFile(filepath.Join(outDir, "service.proto"))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	output := string(outData)
+
+	// Substitution should work: @HasAnyRole(ADMIN) -> "Requires role: ADMIN"
+	if !strings.Contains(output, "Requires role: ADMIN") {
+		t.Errorf("output should contain substituted 'Requires role: ADMIN', got:\n%s", output)
+	}
+	// PublicApi annotation should be removed (empty substitution)
+	if strings.Contains(output, "PublicApi") {
+		t.Errorf("output should not contain PublicApi (empty substitution), got:\n%s", output)
+	}
+	// Deprecated field should be removed
+	if strings.Contains(output, "old_field") {
+		t.Errorf("output should not contain deprecated field, got:\n%s", output)
+	}
+}
+
+// T032 (011): Combined filtering with strict substitutions — unknown annotation fails
+func TestCombinedWithStrictSubstitutionCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package stricttest;
+
+// [PublicApi]
+service Svc {
+  // @Unknown
+  rpc Method(Req) returns (Resp);
+}
+
+message Req {
+  uint64 id = 1;
+}
+
+message Resp {
+  string name = 1;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgContent := `annotations:
+  include:
+    - "PublicApi"
+  exclude:
+    - "Deprecated"
+substitutions:
+  PublicApi: ""
+strict_substitutions: true
+`
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(cfgContent), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
 	if code != 2 {
 		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
 	}
-	if !strings.Contains(stderr, "mutually exclusive") {
-		t.Errorf("stderr should contain 'mutually exclusive', got: %s", stderr)
+	if !strings.Contains(stderr, "Unknown") {
+		t.Errorf("stderr should mention 'Unknown', got: %s", stderr)
 	}
 }

@@ -1,0 +1,34 @@
+syntax = "proto3";
+package combined;
+
+// [PublicApi]
+service OrderService {
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+}
+
+// [Internal]
+service AdminService {
+  rpc DeleteAll(Empty) returns (Empty);
+}
+
+message Empty {}
+
+message ListOrdersRequest {}
+
+message ListOrdersResponse {
+  repeated string orders = 1;
+  // [Deprecated]
+  uint64 index = 2;
+}
+
+message GetOrderRequest {
+  uint64 id = 1;
+}
+
+message GetOrderResponse {
+  uint64 id = 1;
+  string name = 2;
+  // @Deprecated
+  string legacy_name = 3;
+}

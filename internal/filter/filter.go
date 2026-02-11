@@ -345,6 +345,86 @@ func IncludeMethodsByAnnotation(def *proto.Proto, annotations []string) int {
 	return removed
 }
 
+// FilterFieldsByAnnotation removes individual message fields from the proto
+// AST whose comments contain any of the specified annotations. Handles
+// NormalField, MapField, and OneOfField (within Oneof containers). Also
+// recurses into nested messages. Returns the total count of fields removed.
+func FilterFieldsByAnnotation(def *proto.Proto, annotations []string) int {
+	if len(annotations) == 0 {
+		return 0
+	}
+	annotSet := make(map[string]bool, len(annotations))
+	for _, a := range annotations {
+		annotSet[a] = true
+	}
+
+	removed := 0
+	for _, elem := range def.Elements {
+		msg, ok := elem.(*proto.Message)
+		if !ok {
+			continue
+		}
+		removed += filterFieldsInMessage(msg, annotSet)
+	}
+	return removed
+}
+
+func filterFieldsInMessage(msg *proto.Message, annotSet map[string]bool) int {
+	removed := 0
+	filtered := make([]proto.Visitee, 0, len(msg.Elements))
+	for _, elem := range msg.Elements {
+		switch f := elem.(type) {
+		case *proto.NormalField:
+			if fieldHasAnnotation(f.Comment, f.InlineComment, annotSet) {
+				removed++
+				continue
+			}
+		case *proto.MapField:
+			if fieldHasAnnotation(f.Comment, f.InlineComment, annotSet) {
+				removed++
+				continue
+			}
+		case *proto.Oneof:
+			removed += filterFieldsInOneof(f, annotSet)
+		case *proto.Message:
+			removed += filterFieldsInMessage(f, annotSet)
+		}
+		filtered = append(filtered, elem)
+	}
+	msg.Elements = filtered
+	return removed
+}
+
+func filterFieldsInOneof(oneof *proto.Oneof, annotSet map[string]bool) int {
+	removed := 0
+	filtered := make([]proto.Visitee, 0, len(oneof.Elements))
+	for _, elem := range oneof.Elements {
+		if f, ok := elem.(*proto.OneOfField); ok {
+			if fieldHasAnnotation(f.Comment, f.InlineComment, annotSet) {
+				removed++
+				continue
+			}
+		}
+		filtered = append(filtered, elem)
+	}
+	oneof.Elements = filtered
+	return removed
+}
+
+func fieldHasAnnotation(comment, inlineComment *proto.Comment, annotSet map[string]bool) bool {
+	for _, a := range ExtractAnnotations(comment) {
+		if annotSet[a] {
+			return true
+		}
+	}
+	for _, a := range ExtractAnnotations(inlineComment) {
+		if annotSet[a] {
+			return true
+		}
+	}
+	return false
+}
+
 // RemoveEmptyServices removes service definitions that have zero RPC
 // method children. Returns the count of removed services.
 func RemoveEmptyServices(def *proto.Proto) int {
@@ -567,6 +647,17 @@ func cleanBlockCommentLine(line string) string {
 // token to be removed; if all content is removed from a comment line, the
 // line is dropped; if all lines are dropped, the comment is set to nil on the
 // element. Returns the total count of substitutions made.
+// StripAnnotations removes annotation markers from comments by substituting
+// each annotation name with an empty string. It reuses SubstituteAnnotations
+// internally, which handles removing empty comment lines and nil-ing comments.
+func StripAnnotations(def *proto.Proto, annotations []string) int {
+	stripMap := make(map[string]string, len(annotations))
+	for _, name := range annotations {
+		stripMap[name] = ""
+	}
+	return SubstituteAnnotations(def, stripMap)
+}
+
 func SubstituteAnnotations(def *proto.Proto, substitutions map[string]string) int {
 	if len(substitutions) == 0 {
 		return 0

@@ -68,12 +68,7 @@ func LoadConfig(path string) (*FilterConfig, error) {
 }
 
 // Validate checks the configuration for invalid combinations.
-// Returns an error if both annotations.include and annotations.exclude
-// are non-empty.
 func (c *FilterConfig) Validate() error {
-	if len(c.Annotations.Include) > 0 && len(c.Annotations.Exclude) > 0 {
-		return fmt.Errorf("annotations.include and annotations.exclude are mutually exclusive")
-	}
 	return nil
 }
 
