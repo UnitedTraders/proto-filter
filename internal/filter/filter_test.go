@@ -2115,6 +2115,389 @@ func TestCollectAnnotationLocationsNilComment(t *testing.T) {
 	}
 }
 
+// --- Substitution Placeholder Tests (Feature 010) ---
+
+// T005: Test placeholder interpolation with @-style annotation
+func TestSubstituteAnnotationsPlaceholder(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "SetMin",
+						Comment: &proto.Comment{
+							Lines: []string{" @Min(3)"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"Min": "Minimal value is %s",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if !strings.Contains(lines, "Minimal value is 3") {
+		t.Errorf("expected 'Minimal value is 3', got: %s", lines)
+	}
+	if strings.Contains(lines, "%s") {
+		t.Errorf("output should not contain literal %%s, got: %s", lines)
+	}
+	if strings.Contains(lines, "@Min") {
+		t.Errorf("output should not contain @Min, got: %s", lines)
+	}
+}
+
+// T006: Test placeholder interpolation with bracket-style annotation
+func TestSubstituteAnnotationsPlaceholderBracketStyle(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "TagMethod",
+						Comment: &proto.Comment{
+							Lines: []string{" [Tag(important)]"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"Tag": "Tagged: %s",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if !strings.Contains(lines, "Tagged: important") {
+		t.Errorf("expected 'Tagged: important', got: %s", lines)
+	}
+}
+
+// T007: Test placeholder interpolation with complex arguments
+func TestSubstituteAnnotationsPlaceholderComplexArgs(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "SecureMethod",
+						Comment: &proto.Comment{
+							Lines: []string{` @HasAnyRole({"ADMIN", "MANAGER"})`},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"HasAnyRole": "Requires roles: %s",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if !strings.Contains(lines, `Requires roles: {"ADMIN", "MANAGER"}`) {
+		t.Errorf("expected 'Requires roles: {\"ADMIN\", \"MANAGER\"}', got: %s", lines)
+	}
+}
+
+// T008: Test no-placeholder substitution with arguments (FR-004)
+func TestSubstituteAnnotationsNoPlaceholderWithArgs(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "SetMin",
+						Comment: &proto.Comment{
+							Lines: []string{" @Min(3)"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"Min": "Has minimum constraint",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if !strings.Contains(lines, "Has minimum constraint") {
+		t.Errorf("expected 'Has minimum constraint', got: %s", lines)
+	}
+}
+
+// T009: Test multiple %s placeholders — only first replaced (FR-007)
+func TestSubstituteAnnotationsMultiplePlaceholders(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "SetRange",
+						Comment: &proto.Comment{
+							Lines: []string{" @Range(5)"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"Range": "Between %s and %s",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if !strings.Contains(lines, "Between 5 and %s") {
+		t.Errorf("expected 'Between 5 and %%s', got: %s", lines)
+	}
+}
+
+// T014: Golden file test for placeholder substitution
+func TestGoldenFilePlaceholderReplaced(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "placeholder_service.proto")
+	goldenPath := filepath.Join(testdataDir(t, "substitution"), "expected", "placeholder_replaced.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ConvertBlockComments(def)
+	SubstituteAnnotations(def, map[string]string{
+		"Min":        "Minimal value is %s",
+		"Max":        "Maximum value is %s",
+		"HasAnyRole": "Requires roles: %s",
+		"Tag":        "Tagged: %s",
+		"Deprecated": "This method is deprecated",
+	})
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "placeholder_replaced.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// --- User Story 2: Graceful Handling of Missing Arguments (Feature 010) ---
+
+// T016: Test placeholder with no arguments (@Min without parentheses)
+func TestSubstituteAnnotationsPlaceholderNoArgs(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "SetMin",
+						Comment: &proto.Comment{
+							Lines: []string{" @Min"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"Min": "Minimal value is %s",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	// %s should be replaced with empty string
+	if strings.Contains(lines, "%s") {
+		t.Errorf("output should not contain literal %%s, got: %s", lines)
+	}
+	if !strings.Contains(lines, "Minimal value is") {
+		t.Errorf("expected 'Minimal value is', got: %s", lines)
+	}
+}
+
+// T017: Test placeholder with empty parentheses @Min() (FR-008)
+func TestSubstituteAnnotationsPlaceholderEmptyParens(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "SetMin",
+						Comment: &proto.Comment{
+							Lines: []string{" @Min()"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"Min": "Minimal value is %s",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if strings.Contains(lines, "%s") {
+		t.Errorf("output should not contain literal %%s, got: %s", lines)
+	}
+	if !strings.Contains(lines, "Minimal value is") {
+		t.Errorf("expected 'Minimal value is', got: %s", lines)
+	}
+}
+
+// T018: Test placeholder with bracket-style annotation without args (FR-005)
+func TestSubstituteAnnotationsPlaceholderBracketNoArgs(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "TestService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "TagMethod",
+						Comment: &proto.Comment{
+							Lines: []string{" [Tag]"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	count := SubstituteAnnotations(def, map[string]string{
+		"Tag": "Tagged: %s",
+	})
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if strings.Contains(lines, "%s") {
+		t.Errorf("output should not contain literal %%s, got: %s", lines)
+	}
+	if !strings.Contains(lines, "Tagged:") {
+		t.Errorf("expected 'Tagged:', got: %s", lines)
+	}
+}
+
+// T020 (010): Test placeholder substitution with special characters in arguments (FR-006)
+func TestSubstituteAnnotationsPlaceholderSpecialChars(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "Svc",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "M1",
+						Comment: &proto.Comment{
+							Lines: []string{" @Format(100%)"},
+						},
+					},
+				},
+			},
+		},
+	}
+	subs := map[string]string{
+		"Format": "Format is %s",
+	}
+	count := SubstituteAnnotations(def, subs)
+	if count != 1 {
+		t.Errorf("expected 1 substitution, got %d", count)
+	}
+
+	svc := def.Elements[0].(*proto.Service)
+	rpc := svc.Elements[0].(*proto.RPC)
+	if rpc.Comment == nil {
+		t.Fatal("comment should not be nil")
+	}
+	lines := strings.Join(rpc.Comment.Lines, "\n")
+	if !strings.Contains(lines, "Format is 100%") {
+		t.Errorf("expected 'Format is 100%%', got: %s", lines)
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))

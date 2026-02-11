@@ -12,7 +12,7 @@ import (
 )
 
 var annotationRegex = regexp.MustCompile(`@(\w[\w.]*)|\[(\w[\w.]*)(?:\([^)]*\))?\]`)
-var substitutionRegex = regexp.MustCompile(`@(\w[\w.]*)(?:\([^)]*\))?|\[(\w[\w.]*)(?:\([^)]*\))?\]`)
+var substitutionRegex = regexp.MustCompile(`@(\w[\w.]*)(?:\(([^)]*)\))?|\[(\w[\w.]*)(?:\(([^)]*)\))?\]`)
 
 // AnnotationLocation represents a single annotation occurrence found in a
 // proto source file, with its file path and line number.
@@ -622,14 +622,19 @@ func substituteInComment(cp **proto.Comment, substitutions map[string]string) in
 	var cleaned []string
 	for _, line := range c.Lines {
 		newLine := substitutionRegex.ReplaceAllStringFunc(line, func(match string) string {
-			// Parse the match to extract annotation name
+			// Parse the match to extract annotation name and argument
 			submatch := substitutionRegex.FindStringSubmatch(match)
 			name := submatch[1]
+			args := submatch[2]
 			if name == "" {
-				name = submatch[2]
+				name = submatch[3]
+				args = submatch[4]
 			}
 			if replacement, ok := substitutions[name]; ok {
 				count++
+				if strings.Contains(replacement, "%s") {
+					return strings.Replace(replacement, "%s", args, 1)
+				}
 				return replacement
 			}
 			return match
@@ -702,7 +707,7 @@ func collectLocationsFromComment(c *proto.Comment, relPath string, locations []A
 		for _, m := range matches {
 			name := m[1]
 			if name == "" {
-				name = m[2]
+				name = m[3]
 			}
 			locations = append(locations, AnnotationLocation{
 				File:  relPath,
