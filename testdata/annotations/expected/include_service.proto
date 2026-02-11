@@ -4,11 +4,9 @@ package annotations;
 
 service OrderService {
 
-  // @Public
   // Creates a new order in the system.
   rpc CreateOrder (CreateOrderRequest) returns (CreateOrderResponse);
 
-  // [Public]
   // Deletes an existing order.
   rpc DeleteOrder (DeleteOrderRequest) returns (DeleteOrderResponse);
 }

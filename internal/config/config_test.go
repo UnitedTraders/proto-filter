@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -213,8 +212,8 @@ func TestLoadConfigFlatAnnotationsBackwardCompat(t *testing.T) {
 	}
 }
 
-// T022: Test mutual exclusivity validation
-func TestValidateMutualExclusivity(t *testing.T) {
+// T022 (updated by 011): Combined include+exclude is now allowed
+func TestValidateCombinedIncludeExcludePass(t *testing.T) {
 	cfg := FilterConfig{
 		Annotations: AnnotationConfig{
 			Include: []string{"Public"},
@@ -222,11 +221,8 @@ func TestValidateMutualExclusivity(t *testing.T) {
 		},
 	}
 	err := cfg.Validate()
-	if err == nil {
-		t.Fatal("expected error for mutually exclusive annotations")
-	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("error should mention 'mutually exclusive', got: %v", err)
+	if err != nil {
+		t.Fatalf("expected no error for combined include+exclude, got: %v", err)
 	}
 }
 

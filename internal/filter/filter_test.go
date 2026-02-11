@@ -1624,6 +1624,7 @@ func TestGoldenFileIncludeService(t *testing.T) {
 
 	IncludeMethodsByAnnotation(def, []string{"Public"})
 	RemoveOrphanedDefinitions(def, "annotations")
+	StripAnnotations(def, []string{"Public"})
 	ConvertBlockComments(def)
 
 	outputDir := t.TempDir()
@@ -2495,6 +2496,496 @@ func TestSubstituteAnnotationsPlaceholderSpecialChars(t *testing.T) {
 	lines := strings.Join(rpc.Comment.Lines, "\n")
 	if !strings.Contains(lines, "Format is 100%") {
 		t.Errorf("expected 'Format is 100%%', got: %s", lines)
+	}
+}
+
+// === Phase 2 (011): Field-Level Annotation Filtering Tests ===
+
+// T005: NormalField with [Deprecated] comment is removed
+func TestFilterFieldsByAnnotationNormalField(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "TestMessage",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{Name: "keep_field1", Type: "string", Sequence: 1},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{
+							Name: "deprecated_field", Type: "string", Sequence: 2,
+							Comment: &proto.Comment{Lines: []string{" [Deprecated]"}},
+						},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{Name: "keep_field2", Type: "int32", Sequence: 3},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 1 {
+		t.Errorf("expected 1 field removed, got %d", removed)
+	}
+	msg := def.Elements[0].(*proto.Message)
+	if len(msg.Elements) != 2 {
+		t.Fatalf("expected 2 remaining fields, got %d", len(msg.Elements))
+	}
+	f1 := msg.Elements[0].(*proto.NormalField)
+	f2 := msg.Elements[1].(*proto.NormalField)
+	if f1.Name != "keep_field1" || f2.Name != "keep_field2" {
+		t.Errorf("wrong fields remaining: %s, %s", f1.Name, f2.Name)
+	}
+}
+
+// T006: @Deprecated syntax (at-sign) also works
+func TestFilterFieldsByAnnotationAtSignSyntax(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "TestMessage",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{
+							Name: "old_field", Type: "string", Sequence: 1,
+							Comment: &proto.Comment{Lines: []string{" @Deprecated"}},
+						},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{Name: "new_field", Type: "string", Sequence: 2},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 1 {
+		t.Errorf("expected 1 field removed, got %d", removed)
+	}
+	msg := def.Elements[0].(*proto.Message)
+	if len(msg.Elements) != 1 {
+		t.Fatalf("expected 1 remaining field, got %d", len(msg.Elements))
+	}
+	f := msg.Elements[0].(*proto.NormalField)
+	if f.Name != "new_field" {
+		t.Errorf("expected new_field, got %s", f.Name)
+	}
+}
+
+// T007: InlineComment annotation also triggers removal
+func TestFilterFieldsByAnnotationInlineComment(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "TestMessage",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{
+							Name: "inline_deprecated", Type: "string", Sequence: 1,
+							InlineComment: &proto.Comment{Lines: []string{" [Deprecated]"}},
+						},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{Name: "keep_field", Type: "string", Sequence: 2},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 1 {
+		t.Errorf("expected 1 field removed, got %d", removed)
+	}
+	msg := def.Elements[0].(*proto.Message)
+	if len(msg.Elements) != 1 {
+		t.Fatalf("expected 1 remaining field, got %d", len(msg.Elements))
+	}
+}
+
+// T008: MapField with [Deprecated] is removed
+func TestFilterFieldsByAnnotationMapField(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "TestMessage",
+				Elements: []proto.Visitee{
+					&proto.MapField{
+						Field: &proto.Field{
+							Name: "old_map", Type: "string", Sequence: 1,
+							Comment: &proto.Comment{Lines: []string{" [Deprecated]"}},
+						},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{Name: "keep_field", Type: "string", Sequence: 2},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 1 {
+		t.Errorf("expected 1 field removed, got %d", removed)
+	}
+	msg := def.Elements[0].(*proto.Message)
+	if len(msg.Elements) != 1 {
+		t.Fatalf("expected 1 remaining element, got %d", len(msg.Elements))
+	}
+}
+
+// T009: OneOfField inside Oneof container with [Deprecated] is removed
+func TestFilterFieldsByAnnotationOneofField(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "TestMessage",
+				Elements: []proto.Visitee{
+					&proto.Oneof{
+						Name: "test_oneof",
+						Elements: []proto.Visitee{
+							&proto.OneOfField{
+								Field: &proto.Field{Name: "keep_option", Type: "string", Sequence: 1},
+							},
+							&proto.OneOfField{
+								Field: &proto.Field{
+									Name: "deprecated_option", Type: "int32", Sequence: 2,
+									Comment: &proto.Comment{Lines: []string{" [Deprecated]"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 1 {
+		t.Errorf("expected 1 field removed, got %d", removed)
+	}
+	msg := def.Elements[0].(*proto.Message)
+	oneof := msg.Elements[0].(*proto.Oneof)
+	if len(oneof.Elements) != 1 {
+		t.Fatalf("expected 1 remaining oneof field, got %d", len(oneof.Elements))
+	}
+	f := oneof.Elements[0].(*proto.OneOfField)
+	if f.Name != "keep_option" {
+		t.Errorf("expected keep_option, got %s", f.Name)
+	}
+}
+
+// T010: No matching annotations — all fields remain
+func TestFilterFieldsByAnnotationNoMatch(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "TestMessage",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{Name: "field1", Type: "string", Sequence: 1},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{
+							Name: "field2", Type: "int32", Sequence: 2,
+							Comment: &proto.Comment{Lines: []string{" some comment"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 0 {
+		t.Errorf("expected 0 fields removed, got %d", removed)
+	}
+	msg := def.Elements[0].(*proto.Message)
+	if len(msg.Elements) != 2 {
+		t.Errorf("expected 2 fields unchanged, got %d", len(msg.Elements))
+	}
+}
+
+// T011: All fields annotated — all removed, message has empty elements
+func TestFilterFieldsByAnnotationAllFieldsRemoved(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "TestMessage",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{
+							Name: "f1", Type: "string", Sequence: 1,
+							Comment: &proto.Comment{Lines: []string{" @Deprecated"}},
+						},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{
+							Name: "f2", Type: "int32", Sequence: 2,
+							Comment: &proto.Comment{Lines: []string{" [Deprecated]"}},
+						},
+					},
+					&proto.MapField{
+						Field: &proto.Field{
+							Name: "f3", Type: "string", Sequence: 3,
+							InlineComment: &proto.Comment{Lines: []string{" @Deprecated"}},
+						},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 3 {
+		t.Errorf("expected 3 fields removed, got %d", removed)
+	}
+	msg := def.Elements[0].(*proto.Message)
+	if len(msg.Elements) != 0 {
+		t.Errorf("expected 0 remaining fields, got %d", len(msg.Elements))
+	}
+}
+
+// === Phase 3 (011): Combined Include + Exclude Filtering Tests ===
+
+// T017: Combined include+exclude — service included, deprecated method removed
+func TestCombinedIncludeExcludeFiltering(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "PublicService",
+				Comment: &proto.Comment{
+					Lines: []string{" [PublicApi]"},
+				},
+				Elements: []proto.Visitee{
+					&proto.RPC{Name: "ActiveMethod"},
+					&proto.RPC{
+						Name: "DeprecatedMethod",
+						Comment: &proto.Comment{
+							Lines: []string{" [Deprecated]"},
+						},
+					},
+				},
+			},
+			&proto.Service{
+				Name: "InternalService",
+				Comment: &proto.Comment{
+					Lines: []string{" [Internal]"},
+				},
+				Elements: []proto.Visitee{
+					&proto.RPC{Name: "InternalMethod"},
+				},
+			},
+		},
+	}
+
+	// Step 1: Include pass — keep only PublicApi services
+	// (service-level only; methods within included services are kept)
+	IncludeServicesByAnnotation(def, []string{"PublicApi"})
+
+	// Step 2: Exclude pass — remove Deprecated methods
+	FilterServicesByAnnotation(def, []string{"Deprecated"})
+	FilterMethodsByAnnotation(def, []string{"Deprecated"})
+
+	// PublicService should remain
+	var serviceNames []string
+	proto.Walk(def, proto.WithService(func(s *proto.Service) {
+		serviceNames = append(serviceNames, s.Name)
+	}))
+	if len(serviceNames) != 1 || serviceNames[0] != "PublicService" {
+		t.Errorf("expected [PublicService], got %v", serviceNames)
+	}
+
+	// Only ActiveMethod should remain (DeprecatedMethod excluded)
+	var methodNames []string
+	proto.Walk(def, proto.WithRPC(func(r *proto.RPC) {
+		methodNames = append(methodNames, r.Name)
+	}))
+	if len(methodNames) != 1 || methodNames[0] != "ActiveMethod" {
+		t.Errorf("expected [ActiveMethod], got %v", methodNames)
+	}
+}
+
+// T018: Combined include+exclude with field-level filtering
+func TestCombinedIncludeExcludeWithFieldFiltering(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "PublicService",
+				Comment: &proto.Comment{
+					Lines: []string{" [PublicApi]"},
+				},
+				Elements: []proto.Visitee{
+					&proto.RPC{Name: "GetItem", RequestType: "GetItemRequest", ReturnsType: "GetItemResponse"},
+				},
+			},
+			&proto.Message{
+				Name: "GetItemRequest",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{Name: "id", Type: "uint64", Sequence: 1},
+					},
+				},
+			},
+			&proto.Message{
+				Name: "GetItemResponse",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{Name: "name", Type: "string", Sequence: 1},
+					},
+					&proto.NormalField{
+						Field: &proto.Field{
+							Name: "old_field", Type: "string", Sequence: 2,
+							Comment: &proto.Comment{Lines: []string{" [Deprecated]"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Include pass (service level)
+	IncludeServicesByAnnotation(def, []string{"PublicApi"})
+
+	// Exclude pass (field level)
+	fr := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if fr != 1 {
+		t.Errorf("expected 1 field removed, got %d", fr)
+	}
+
+	// Service remains
+	var serviceCount int
+	proto.Walk(def, proto.WithService(func(s *proto.Service) { serviceCount++ }))
+	if serviceCount != 1 {
+		t.Errorf("expected 1 service, got %d", serviceCount)
+	}
+
+	// GetItemResponse should have only "name" field
+	for _, elem := range def.Elements {
+		msg, ok := elem.(*proto.Message)
+		if !ok || msg.Name != "GetItemResponse" {
+			continue
+		}
+		if len(msg.Elements) != 1 {
+			t.Errorf("expected 1 field in GetItemResponse, got %d", len(msg.Elements))
+		}
+		f := msg.Elements[0].(*proto.NormalField)
+		if f.Name != "name" {
+			t.Errorf("expected 'name' field, got '%s'", f.Name)
+		}
+	}
+}
+
+// T026: Golden file test for combined include+exclude filtering
+func TestGoldenFileCombinedFiltering(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "combined"), "combined_service.proto")
+	goldenPath := filepath.Join(testdataDir(t, "combined"), "expected", "combined_filtered.proto")
+
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	// Include pass — service level
+	IncludeServicesByAnnotation(def, []string{"PublicApi"})
+
+	// Exclude pass — service, method, field level
+	FilterServicesByAnnotation(def, []string{"Deprecated"})
+	FilterMethodsByAnnotation(def, []string{"Deprecated"})
+	FilterFieldsByAnnotation(def, []string{"Deprecated"})
+
+	RemoveEmptyServices(def)
+	RemoveOrphanedDefinitions(def, "combined")
+	StripAnnotations(def, []string{"PublicApi"})
+	ConvertBlockComments(def)
+
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "combined_filtered.proto")
+	if err := writer.WriteProtoFile(def, outputPath); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	actual, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// T030: Nested message field filtering
+func TestFilterFieldsByAnnotationNestedMessage(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "OuterMessage",
+				Elements: []proto.Visitee{
+					&proto.NormalField{
+						Field: &proto.Field{Name: "outer_field", Type: "string", Sequence: 1},
+					},
+					&proto.Message{
+						Name: "InnerMessage",
+						Elements: []proto.Visitee{
+							&proto.NormalField{
+								Field: &proto.Field{Name: "keep_inner", Type: "string", Sequence: 1},
+							},
+							&proto.NormalField{
+								Field: &proto.Field{
+									Name: "deprecated_inner", Type: "int32", Sequence: 2,
+									Comment: &proto.Comment{Lines: []string{" [Deprecated]"}},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	removed := FilterFieldsByAnnotation(def, []string{"Deprecated"})
+	if removed != 1 {
+		t.Errorf("expected 1 field removed from nested message, got %d", removed)
+	}
+	outer := def.Elements[0].(*proto.Message)
+	if len(outer.Elements) != 2 {
+		t.Fatalf("outer message should still have 2 elements, got %d", len(outer.Elements))
+	}
+	inner := outer.Elements[1].(*proto.Message)
+	if len(inner.Elements) != 1 {
+		t.Errorf("inner message should have 1 field, got %d", len(inner.Elements))
+	}
+	f := inner.Elements[0].(*proto.NormalField)
+	if f.Name != "keep_inner" {
+		t.Errorf("expected keep_inner, got %s", f.Name)
+	}
+}
+
+// T019: Same annotation in both include and exclude — net result: removed
+func TestCombinedSameAnnotationInBothLists(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "PublicService",
+				Comment: &proto.Comment{
+					Lines: []string{" [PublicApi]"},
+				},
+				Elements: []proto.Visitee{
+					&proto.RPC{Name: "Method1"},
+				},
+			},
+		},
+	}
+
+	// Include pass — service included because it has [PublicApi]
+	IncludeServicesByAnnotation(def, []string{"PublicApi"})
+	// Exclude pass — service excluded because it has [PublicApi]
+	FilterServicesByAnnotation(def, []string{"PublicApi"})
+
+	var serviceCount int
+	proto.Walk(def, proto.WithService(func(s *proto.Service) { serviceCount++ }))
+	if serviceCount != 0 {
+		t.Errorf("expected 0 services (included then excluded), got %d", serviceCount)
 	}
 }
 

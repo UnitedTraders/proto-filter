@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package combined;
+
+service OrderService {
+  rpc ListOrders (ListOrdersRequest) returns (ListOrdersResponse);
+  rpc GetOrder   (GetOrderRequest  ) returns (GetOrderResponse  );
+}
+
+message ListOrdersRequest {}
+
+message ListOrdersResponse {
+  repeated string orders = 1;
+}
+
+message GetOrderRequest {
+  uint64 id = 1;
+}
+
+message GetOrderResponse {
+  uint64 id   = 1;
+  string name = 2;
+}

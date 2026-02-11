@@ -175,6 +175,7 @@ func run() int {
 	processed := make([]processedFile, 0, len(parsed))
 	servicesRemoved := 0
 	methodsRemoved := 0
+	fieldsRemoved := 0
 	orphansRemoved := 0
 	var allLocations []filter.AnnotationLocation
 
@@ -189,23 +190,34 @@ func run() int {
 		skip := false
 		// Annotation-based filtering
 		if cfg != nil && cfg.HasAnnotations() {
-			var sr, mr int
+			var sr, mr, fr int
+			if cfg.HasAnnotationInclude() {
+				sr += filter.IncludeServicesByAnnotation(pf.def, cfg.Annotations.Include)
+				if !cfg.HasAnnotationExclude() {
+					// Include-only mode: also filter methods by include annotations
+					mr += filter.IncludeMethodsByAnnotation(pf.def, cfg.Annotations.Include)
+				}
+			}
 			if cfg.HasAnnotationExclude() {
-				sr = filter.FilterServicesByAnnotation(pf.def, cfg.Annotations.Exclude)
-				mr = filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations.Exclude)
-			} else if cfg.HasAnnotationInclude() {
-				mr = filter.IncludeMethodsByAnnotation(pf.def, cfg.Annotations.Include)
-				sr = filter.IncludeServicesByAnnotation(pf.def, cfg.Annotations.Include)
+				sr += filter.FilterServicesByAnnotation(pf.def, cfg.Annotations.Exclude)
+				mr += filter.FilterMethodsByAnnotation(pf.def, cfg.Annotations.Exclude)
+				fr += filter.FilterFieldsByAnnotation(pf.def, cfg.Annotations.Exclude)
 			}
 			servicesRemoved += sr
 			methodsRemoved += mr
+			fieldsRemoved += fr
 			filter.RemoveEmptyServices(pf.def)
-			if sr > 0 || mr > 0 {
+			if sr > 0 || mr > 0 || fr > 0 {
 				orphansRemoved += filter.RemoveOrphanedDefinitions(pf.def, pf.pkg)
 			}
 
 			if !filter.HasRemainingDefinitions(pf.def) {
 				skip = true
+			}
+
+			// Strip include annotation markers from output
+			if cfg.HasAnnotationInclude() {
+				filter.StripAnnotations(pf.def, cfg.Annotations.Include)
 			}
 		}
 
@@ -278,7 +290,7 @@ func run() int {
 		fmt.Fprintf(os.Stderr, "proto-filter: processed %d files, %d definitions\n", len(files), totalDefs)
 		fmt.Fprintf(os.Stderr, "proto-filter: included %d definitions, excluded %d\n", includedCount, excludedCount)
 		if cfg != nil && cfg.HasAnnotations() {
-			fmt.Fprintf(os.Stderr, "proto-filter: removed %d services by annotation, %d methods by annotation, %d orphaned definitions\n", servicesRemoved, methodsRemoved, orphansRemoved)
+			fmt.Fprintf(os.Stderr, "proto-filter: removed %d services by annotation, %d methods by annotation, %d fields by annotation, %d orphaned definitions\n", servicesRemoved, methodsRemoved, fieldsRemoved, orphansRemoved)
 		}
 		if cfg != nil && cfg.HasSubstitutions() {
 			fmt.Fprintf(os.Stderr, "proto-filter: substituted %d annotations\n", substitutionCount)
