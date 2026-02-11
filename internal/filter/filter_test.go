@@ -2025,6 +2025,96 @@ func TestGoldenFileSubstitutionRemoved(t *testing.T) {
 	}
 }
 
+// --- Annotation Location Tests (Feature 009) ---
+
+// T002: Test CollectAnnotationLocations with known fixture
+func TestCollectAnnotationLocations(t *testing.T) {
+	inputPath := filepath.Join(testdataDir(t, "substitution"), "substitution_service.proto")
+	def, err := parser.ParseProtoFile(inputPath)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	ConvertBlockComments(def)
+
+	locations := CollectAnnotationLocations(def, "substitution_service.proto")
+
+	// Expected: 3 annotations at lines 6, 10, 13
+	if len(locations) != 3 {
+		t.Fatalf("expected 3 locations, got %d: %+v", len(locations), locations)
+	}
+
+	expected := []struct {
+		File  string
+		Line  int
+		Name  string
+		Token string
+	}{
+		{"substitution_service.proto", 6, "HasAnyRole", `@HasAnyRole({"ADMIN", "MANAGER"})`},
+		{"substitution_service.proto", 10, "Internal", "@Internal"},
+		{"substitution_service.proto", 13, "Public", "[Public]"},
+	}
+
+	for i, exp := range expected {
+		loc := locations[i]
+		if loc.File != exp.File {
+			t.Errorf("location[%d].File = %q, want %q", i, loc.File, exp.File)
+		}
+		if loc.Line != exp.Line {
+			t.Errorf("location[%d].Line = %d, want %d", i, loc.Line, exp.Line)
+		}
+		if loc.Name != exp.Name {
+			t.Errorf("location[%d].Name = %q, want %q", i, loc.Name, exp.Name)
+		}
+		if loc.Token != exp.Token {
+			t.Errorf("location[%d].Token = %q, want %q", i, loc.Token, exp.Token)
+		}
+	}
+}
+
+// T003: Test CollectAnnotationLocations with empty proto
+func TestCollectAnnotationLocationsEmpty(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "PlainService",
+				Elements: []proto.Visitee{
+					&proto.RPC{
+						Name: "GetData",
+						Comment: &proto.Comment{
+							Lines: []string{" Returns data for the user."},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	locations := CollectAnnotationLocations(def, "plain.proto")
+	if len(locations) != 0 {
+		t.Errorf("expected 0 locations for plain proto, got %d: %+v", len(locations), locations)
+	}
+}
+
+// T003b: Test CollectAnnotationLocations with nil comment
+func TestCollectAnnotationLocationsNilComment(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Service{
+				Name: "NoCommentService",
+				Elements: []proto.Visitee{
+					&proto.RPC{Name: "NoComment"},
+				},
+			},
+		},
+	}
+
+	locations := CollectAnnotationLocations(def, "nocomment.proto")
+	if len(locations) != 0 {
+		t.Errorf("expected 0 locations, got %d", len(locations))
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))

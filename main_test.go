@@ -1078,6 +1078,188 @@ substitutions:
 	}
 }
 
+// --- Annotation Error Location CLI Tests (Feature 009) ---
+
+// T004: CLI integration test for strict substitution error with location lines
+func TestStrictSubstitutionErrorWithLocations(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := setupSingleProtoInput(t, "substitution_service.proto")
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`substitutions:
+  HasAnyRole: "Auth required"
+strict_substitutions: true
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
+	}
+
+	// Summary line must be present (backward compatibility)
+	if !strings.Contains(stderr, "proto-filter: error: unsubstituted annotations found: Internal, Public") {
+		t.Errorf("stderr should contain summary line, got: %s", stderr)
+	}
+
+	// Location lines must be present with file:line: token format
+	if !strings.Contains(stderr, "  substitution_service.proto:10: @Internal") {
+		t.Errorf("stderr should contain location for @Internal at line 10, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "  substitution_service.proto:13: [Public]") {
+		t.Errorf("stderr should contain location for [Public] at line 13, got: %s", stderr)
+	}
+
+	// HasAnyRole should NOT appear in location lines (it has a mapping)
+	lines := strings.Split(stderr, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "  ") && strings.Contains(line, "HasAnyRole") {
+			t.Errorf("stderr should NOT have location line for HasAnyRole (has mapping), got line: %s", line)
+		}
+	}
+
+	// No output files should be written
+	outFile := filepath.Join(outDir, "substitution_service.proto")
+	if _, err := os.Stat(outFile); err == nil {
+		t.Error("no output files should be written on strict failure")
+	}
+}
+
+// T010: CLI integration test for multi-file location ordering (FR-005)
+func TestStrictErrorMultiFileOrdering(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+
+	// Create two proto files with annotations
+	os.WriteFile(filepath.Join(inputDir, "orders.proto"), []byte(`syntax = "proto3";
+package orders;
+service OrderService {
+  // @Deprecated
+  rpc OldMethod(OldReq) returns (OldResp);
+}
+message OldReq {}
+message OldResp {}
+`), 0o644)
+
+	os.WriteFile(filepath.Join(inputDir, "accounts.proto"), []byte(`syntax = "proto3";
+package accounts;
+service AccountService {
+  // @Internal
+  rpc AdminAction(AdminReq) returns (AdminResp);
+  // @Deprecated
+  rpc LegacyLogin(LoginReq) returns (LoginResp);
+}
+message AdminReq {}
+message AdminResp {}
+message LoginReq {}
+message LoginResp {}
+`), 0o644)
+
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("strict_substitutions: true\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
+	}
+
+	// Verify summary line contains both annotation names
+	if !strings.Contains(stderr, "Deprecated") || !strings.Contains(stderr, "Internal") {
+		t.Errorf("summary should list Deprecated and Internal, got: %s", stderr)
+	}
+
+	// Parse location lines and verify ordering: accounts.proto before orders.proto
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines (1 summary + 3 locations), got %d: %v", len(lines), lines)
+	}
+
+	// Location lines (skip summary)
+	locLines := lines[1:]
+	// accounts.proto locations should come before orders.proto (alphabetical)
+	foundAccountsFirst := false
+	foundOrders := false
+	for _, line := range locLines {
+		if strings.Contains(line, "accounts.proto") && !foundOrders {
+			foundAccountsFirst = true
+		}
+		if strings.Contains(line, "orders.proto") {
+			foundOrders = true
+		}
+	}
+	if !foundAccountsFirst {
+		t.Errorf("accounts.proto locations should come before orders.proto; got lines: %v", locLines)
+	}
+
+	// Within accounts.proto, @Internal (line 4) should come before @Deprecated (line 6)
+	var accountsLines []string
+	for _, line := range locLines {
+		if strings.Contains(line, "accounts.proto") {
+			accountsLines = append(accountsLines, line)
+		}
+	}
+	if len(accountsLines) == 2 {
+		if strings.Contains(accountsLines[0], "Deprecated") && strings.Contains(accountsLines[1], "Internal") {
+			t.Errorf("within accounts.proto, @Internal should come before @Deprecated; got: %v", accountsLines)
+		}
+	}
+}
+
+// T008: CLI integration test verifying summary line is preserved (backward compatibility)
+func TestStrictErrorSummaryLinePreserved(t *testing.T) {
+	bin := buildBinary(t)
+	// Create a single proto file with exactly one annotation
+	inputDir := t.TempDir()
+	os.WriteFile(filepath.Join(inputDir, "single.proto"), []byte(`syntax = "proto3";
+package single;
+service Svc {
+  // @Deprecated
+  rpc Foo(FooReq) returns (FooResp);
+}
+message FooReq {}
+message FooResp {}
+`), 0o644)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("strict_substitutions: true\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	// First line must be the summary line (backward compatible)
+	if len(lines) < 1 || !strings.HasPrefix(lines[0], "proto-filter: error: unsubstituted annotations found: Deprecated") {
+		t.Errorf("first line should be the summary line, got: %v", lines)
+	}
+
+	// Exactly one location line should follow
+	if len(lines) != 2 {
+		t.Errorf("expected exactly 2 lines (summary + 1 location), got %d: %v", len(lines), lines)
+	}
+	if len(lines) >= 2 && !strings.Contains(lines[1], "single.proto:4: @Deprecated") {
+		t.Errorf("second line should be location for @Deprecated, got: %s", lines[1])
+	}
+}
+
 // T025: CLI integration test for mutual exclusivity error
 func TestMutualExclusivityErrorCLI(t *testing.T) {
 	bin := buildBinary(t)

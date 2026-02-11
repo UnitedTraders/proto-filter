@@ -14,6 +14,15 @@ import (
 var annotationRegex = regexp.MustCompile(`@(\w[\w.]*)|\[(\w[\w.]*)(?:\([^)]*\))?\]`)
 var substitutionRegex = regexp.MustCompile(`@(\w[\w.]*)(?:\([^)]*\))?|\[(\w[\w.]*)(?:\([^)]*\))?\]`)
 
+// AnnotationLocation represents a single annotation occurrence found in a
+// proto source file, with its file path and line number.
+type AnnotationLocation struct {
+	File  string // relative file path
+	Line  int    // 1-based line number in source
+	Name  string // annotation name (for substitution map lookup)
+	Token string // full annotation token as it appears in source
+}
+
 // MatchesAny returns true if fqn matches any of the glob patterns.
 // Dots in FQNs are treated as path separators so that `*` matches
 // a single package segment (e.g., `my.package.*` matches
@@ -639,6 +648,71 @@ func substituteInComment(cp **proto.Comment, substitutions map[string]string) in
 		c.Lines = cleaned
 	}
 	return count
+}
+
+// CollectAnnotationLocations walks all elements in the proto AST and collects
+// the location of each annotation occurrence. Returns a slice of AnnotationLocation
+// with the file path, line number, annotation name, and full token.
+func CollectAnnotationLocations(def *proto.Proto, relPath string) []AnnotationLocation {
+	var locations []AnnotationLocation
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Service:
+			locations = collectLocationsFromComment(v.Comment, relPath, locations)
+			for _, svcElem := range v.Elements {
+				if rpc, ok := svcElem.(*proto.RPC); ok {
+					locations = collectLocationsFromComment(rpc.Comment, relPath, locations)
+					locations = collectLocationsFromComment(rpc.InlineComment, relPath, locations)
+				}
+			}
+		case *proto.Message:
+			locations = collectLocationsFromComment(v.Comment, relPath, locations)
+			for _, mElem := range v.Elements {
+				switch f := mElem.(type) {
+				case *proto.NormalField:
+					locations = collectLocationsFromComment(f.Comment, relPath, locations)
+					locations = collectLocationsFromComment(f.InlineComment, relPath, locations)
+				case *proto.MapField:
+					locations = collectLocationsFromComment(f.Comment, relPath, locations)
+					locations = collectLocationsFromComment(f.InlineComment, relPath, locations)
+				case *proto.OneOfField:
+					locations = collectLocationsFromComment(f.Comment, relPath, locations)
+					locations = collectLocationsFromComment(f.InlineComment, relPath, locations)
+				}
+			}
+		case *proto.Enum:
+			locations = collectLocationsFromComment(v.Comment, relPath, locations)
+			for _, eElem := range v.Elements {
+				if ef, ok := eElem.(*proto.EnumField); ok {
+					locations = collectLocationsFromComment(ef.Comment, relPath, locations)
+					locations = collectLocationsFromComment(ef.InlineComment, relPath, locations)
+				}
+			}
+		}
+	}
+	return locations
+}
+
+func collectLocationsFromComment(c *proto.Comment, relPath string, locations []AnnotationLocation) []AnnotationLocation {
+	if c == nil {
+		return locations
+	}
+	for i, line := range c.Lines {
+		matches := substitutionRegex.FindAllStringSubmatch(line, -1)
+		for _, m := range matches {
+			name := m[1]
+			if name == "" {
+				name = m[2]
+			}
+			locations = append(locations, AnnotationLocation{
+				File:  relPath,
+				Line:  c.Position.Line + i,
+				Name:  name,
+				Token: m[0],
+			})
+		}
+	}
+	return locations
 }
 
 // CollectAllAnnotations walks all elements in the proto AST and collects all

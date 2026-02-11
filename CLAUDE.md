@@ -25,9 +25,9 @@ tests/
 Go 1.23+: Follow standard conventions
 
 ## Recent Changes
+- 009-annotation-error-locations: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `gopkg.in/yaml.v3`
 - 008-annotation-substitution: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `gopkg.in/yaml.v3`
 - 007-annotation-include-exclude: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `gopkg.in/yaml.v3`
-- 006-csharp-annotation-syntax: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `github.com/emicklei/proto-contrib` v0.18.3, `gopkg.in/yaml.v3`
 
 
 <!-- MANUAL ADDITIONS START -->
