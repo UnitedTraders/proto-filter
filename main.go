@@ -176,7 +176,7 @@ func run() int {
 	servicesRemoved := 0
 	methodsRemoved := 0
 	orphansRemoved := 0
-	allAnnotations := make(map[string]bool)
+	var allLocations []filter.AnnotationLocation
 
 	for _, pf := range parsed {
 		if !filesToWrite[pf.rel] {
@@ -212,27 +212,44 @@ func run() int {
 		// Convert block comments to single-line style
 		filter.ConvertBlockComments(pf.def)
 
-		// Collect annotations for strict mode check
+		// Collect annotation locations for strict mode check
 		if cfg != nil && cfg.StrictSubstitutions {
-			for name := range filter.CollectAllAnnotations(pf.def) {
-				allAnnotations[name] = true
-			}
+			allLocations = append(allLocations, filter.CollectAnnotationLocations(pf.def, pf.rel)...)
 		}
 
 		processed = append(processed, processedFile{pf: pf, skip: skip})
 	}
 
 	// Strict substitution check: fail if any annotations lack a mapping
-	if cfg != nil && cfg.StrictSubstitutions && len(allAnnotations) > 0 {
-		var missing []string
-		for name := range allAnnotations {
-			if _, ok := cfg.Substitutions[name]; !ok {
-				missing = append(missing, name)
+	if cfg != nil && cfg.StrictSubstitutions && len(allLocations) > 0 {
+		// Find unsubstituted locations and collect unique missing names
+		missingNames := make(map[string]bool)
+		var missingLocations []filter.AnnotationLocation
+		for _, loc := range allLocations {
+			if _, ok := cfg.Substitutions[loc.Name]; !ok {
+				missingNames[loc.Name] = true
+				missingLocations = append(missingLocations, loc)
 			}
 		}
-		if len(missing) > 0 {
-			sort.Strings(missing)
-			fmt.Fprintf(os.Stderr, "proto-filter: error: unsubstituted annotations found: %s\n", joinNames(missing))
+		if len(missingNames) > 0 {
+			// Print summary line (backward compatible)
+			names := make([]string, 0, len(missingNames))
+			for name := range missingNames {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			fmt.Fprintf(os.Stderr, "proto-filter: error: unsubstituted annotations found: %s\n", joinNames(names))
+
+			// Print location lines sorted by file then line
+			sort.Slice(missingLocations, func(i, j int) bool {
+				if missingLocations[i].File != missingLocations[j].File {
+					return missingLocations[i].File < missingLocations[j].File
+				}
+				return missingLocations[i].Line < missingLocations[j].Line
+			})
+			for _, loc := range missingLocations {
+				fmt.Fprintf(os.Stderr, "  %s:%d: %s\n", loc.File, loc.Line, loc.Token)
+			}
 			return 2
 		}
 	}
