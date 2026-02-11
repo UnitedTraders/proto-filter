@@ -1260,7 +1260,148 @@ message FooResp {}
 	}
 }
 
+// --- Substitution Placeholder CLI Tests (Feature 010) ---
+
+// T010 (010): CLI integration test for placeholder substitution
+func TestPlaceholderSubstitutionCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(`syntax = "proto3";
+package placeholder;
+service OrderService {
+  // @Min(3)
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+
+  // @Max(100)
+  rpc UpdateOrder(UpdateOrderRequest) returns (UpdateOrderResponse);
+}
+message CreateOrderRequest {}
+message CreateOrderResponse {}
+message UpdateOrderRequest {}
+message UpdateOrderResponse {}
+`), 0o644)
+
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`substitutions:
+  Min: "Minimal value is %s"
+  Max: "Maximum value is %s"
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outFile := filepath.Join(outDir, "service.proto")
+	content, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("output file missing: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "Minimal value is 3") {
+		t.Error("output should contain 'Minimal value is 3'")
+	}
+	if !strings.Contains(out, "Maximum value is 100") {
+		t.Error("output should contain 'Maximum value is 100'")
+	}
+	if strings.Contains(out, "@Min") {
+		t.Error("output should NOT contain @Min")
+	}
+	if strings.Contains(out, "@Max") {
+		t.Error("output should NOT contain @Max")
+	}
+	if strings.Contains(out, string([]byte{'%', 's'})) {
+		t.Errorf("output should NOT contain literal placeholder")
+	}
+}
+
 // T025: CLI integration test for mutual exclusivity error
+// T021 (010): CLI integration test for placeholder with strict mode
+func TestPlaceholderWithStrictModeCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(`syntax = "proto3";
+package strict;
+service OrderService {
+  // @Min(3)
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  // @Unknown
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+}
+message CreateOrderRequest {}
+message CreateOrderResponse {}
+message ListOrdersRequest {}
+message ListOrdersResponse {}
+`), 0o644)
+
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte(`substitutions:
+  Min: "Minimal value is %s"
+strict_substitutions: true
+`), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "Unknown") {
+		t.Errorf("stderr should contain 'Unknown' as unmapped annotation, got: %s", stderr)
+	}
+	// Min has a mapping, so it should NOT appear in the error
+	if strings.Contains(stderr, "Min") {
+		t.Errorf("stderr should NOT contain 'Min' (has mapping), got: %s", stderr)
+	}
+}
+
+// T022 (010): CLI integration test for placeholder location reporting
+func TestPlaceholderLocationReportingCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(`syntax = "proto3";
+package loc;
+service OrderService {
+  // @Min(3)
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+}
+message CreateOrderRequest {}
+message CreateOrderResponse {}
+`), 0o644)
+
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("strict_substitutions: true\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 2 {
+		t.Errorf("expected exit code 2, got %d; stderr: %s", code, stderr)
+	}
+	// Location line should show full token including arguments: @Min(3)
+	if !strings.Contains(stderr, "@Min(3)") {
+		t.Errorf("location line should contain full token '@Min(3)', got: %s", stderr)
+	}
+}
+
 func TestMutualExclusivityErrorCLI(t *testing.T) {
 	bin := buildBinary(t)
 	outDir := t.TempDir()
