@@ -277,12 +277,6 @@ func IncludeServicesByAnnotation(def *proto.Proto, annotations []string) int {
 			continue
 		}
 		annots := ExtractAnnotations(svc.Comment)
-		if len(annots) == 0 {
-			// No service-level annotations: keep the service,
-			// let method-level filtering decide its fate.
-			filtered = append(filtered, elem)
-			continue
-		}
 		hasMatch := false
 		for _, a := range annots {
 			if annotSet[a] {

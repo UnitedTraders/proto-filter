@@ -1563,8 +1563,8 @@ func TestIncludeServicesByAnnotation(t *testing.T) {
 	}
 
 	removed := IncludeServicesByAnnotation(def, []string{"Public"})
-	if removed != 1 {
-		t.Errorf("expected 1 service removed (InternalService has non-matching annotation), got %d", removed)
+	if removed != 2 {
+		t.Errorf("expected 2 services removed (InternalService + UnannotatedService), got %d", removed)
 	}
 
 	var serviceNames []string
@@ -1573,8 +1573,8 @@ func TestIncludeServicesByAnnotation(t *testing.T) {
 	}))
 
 	// PublicService kept (has matching annotation)
-	// UnannotatedService kept (no annotations, deferred to method-level filtering)
 	// InternalService removed (has annotation but not matching)
+	// UnannotatedService removed (no annotations, does not match include list)
 	nameSet := make(map[string]bool)
 	for _, n := range serviceNames {
 		nameSet[n] = true
@@ -1582,8 +1582,8 @@ func TestIncludeServicesByAnnotation(t *testing.T) {
 	if !nameSet["PublicService"] {
 		t.Error("PublicService should remain (has @Public)")
 	}
-	if !nameSet["UnannotatedService"] {
-		t.Error("UnannotatedService should remain (no annotations, left for method-level filtering)")
+	if nameSet["UnannotatedService"] {
+		t.Error("UnannotatedService should be removed (no annotations, does not match include list)")
 	}
 	if nameSet["InternalService"] {
 		t.Error("InternalService should be removed (has @Internal, not matching @Public)")
