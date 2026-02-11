@@ -1499,6 +1499,61 @@ message GetOrderResponse {
 	}
 }
 
+// T003 (012): CLI test — combined include+exclude removes unannotated service entirely
+func TestCombinedIncludeExcludeUnannotatedServiceCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	// Bug report scenario: unannotated service with deprecated fields
+	protoContent := `syntax = "proto3";
+package bugtest;
+
+service OrderService {
+  rpc ListOrders(Empty) returns (ListOrdersResponse);
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+}
+
+message Empty {}
+
+message ListOrdersResponse {
+  repeated string orders = 1;
+  // [Deprecated]
+  uint64 index = 2;
+}
+
+message GetOrderRequest {
+  uint64 id = 1;
+}
+
+message GetOrderResponse {
+  uint64 id = 1;
+  string name = 2;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"PublishedApi\"\n  exclude:\n    - \"Deprecated\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Output file should not exist (unannotated service removed, all messages orphaned)
+	outFile := filepath.Join(outDir, "service.proto")
+	if _, err := os.Stat(outFile); err == nil {
+		content, _ := os.ReadFile(outFile)
+		t.Errorf("output file should not exist (unannotated service has no [PublishedApi]), but got:\n%s", string(content))
+	}
+}
+
 // T021 (011): CLI test — combined include+exclude with method removal
 func TestCombinedIncludeExcludeMethodRemovalCLI(t *testing.T) {
 	bin := buildBinary(t)
