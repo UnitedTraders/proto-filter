@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package messages;
+
+message Parameters {
+  Params1 p1 = 1;
+  Params2 p2 = 2;
+}
+
+message Params1 {
+  string name = 1;
+}
+
+message Params2 {
+  uint64 value = 1;
+}

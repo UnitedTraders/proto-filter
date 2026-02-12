@@ -2989,6 +2989,102 @@ func TestCombinedSameAnnotationInBothLists(t *testing.T) {
 	}
 }
 
+// --- Include Message Filtering Tests (Feature 013) ---
+
+// T003: Basic include message filtering
+func TestIncludeMessagesByAnnotation(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{
+				Name: "AnnotatedMessage",
+				Comment: &proto.Comment{
+					Lines: []string{" [PublishedApi]"},
+				},
+			},
+			&proto.Message{
+				Name: "UnannotatedMessage",
+			},
+			&proto.Enum{
+				Name: "AnnotatedEnum",
+				Comment: &proto.Comment{
+					Lines: []string{" [PublishedApi]"},
+				},
+			},
+		},
+	}
+
+	removed := IncludeMessagesByAnnotation(def, []string{"PublishedApi"})
+	if removed != 1 {
+		t.Errorf("expected 1 removed (UnannotatedMessage), got %d", removed)
+	}
+
+	// Check remaining elements
+	names := make(map[string]bool)
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Message:
+			names[v.Name] = true
+		case *proto.Enum:
+			names[v.Name] = true
+		}
+	}
+	if !names["AnnotatedMessage"] {
+		t.Error("AnnotatedMessage should remain (has [PublishedApi])")
+	}
+	if names["UnannotatedMessage"] {
+		t.Error("UnannotatedMessage should be removed (no annotations)")
+	}
+	if !names["AnnotatedEnum"] {
+		t.Error("AnnotatedEnum should remain (has [PublishedApi])")
+	}
+}
+
+// T004: All messages removed when none match
+func TestIncludeMessagesByAnnotation_NoAnnotations(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{Name: "Msg1"},
+			&proto.Message{Name: "Msg2"},
+		},
+	}
+
+	removed := IncludeMessagesByAnnotation(def, []string{"PublishedApi"})
+	if removed != 2 {
+		t.Errorf("expected 2 removed, got %d", removed)
+	}
+
+	for _, elem := range def.Elements {
+		if _, ok := elem.(*proto.Message); ok {
+			t.Error("no messages should remain")
+		}
+	}
+}
+
+// T005: Empty annotation list returns 0
+func TestIncludeMessagesByAnnotation_EmptyList(t *testing.T) {
+	def := &proto.Proto{
+		Elements: []proto.Visitee{
+			&proto.Message{Name: "Msg1"},
+			&proto.Message{Name: "Msg2"},
+		},
+	}
+
+	removed := IncludeMessagesByAnnotation(def, []string{})
+	if removed != 0 {
+		t.Errorf("expected 0 removed for empty annotation list, got %d", removed)
+	}
+
+	count := 0
+	for _, elem := range def.Elements {
+		if _, ok := elem.(*proto.Message); ok {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Errorf("expected 2 messages to remain, got %d", count)
+	}
+}
+
 func testdataDir(t *testing.T, sub string) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "testdata", sub))

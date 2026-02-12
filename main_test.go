@@ -1887,3 +1887,204 @@ strict_substitutions: true
 		t.Errorf("stderr should mention 'Unknown', got: %s", stderr)
 	}
 }
+
+// --- Message Include Filtering CLI Tests (Feature 013) ---
+
+// T007: Messages-only file, no matches → empty output
+func TestIncludeMessageOnlyCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package msgonly;
+
+message Msg1 {
+  string name = 1;
+}
+
+message Msg2 {
+  uint64 id = 1;
+}
+
+message Msg3 {
+  bool flag = 1;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "messages.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"NotUsed\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Output file should not exist (no messages match)
+	outFile := filepath.Join(outDir, "messages.proto")
+	if _, err := os.Stat(outFile); err == nil {
+		content, _ := os.ReadFile(outFile)
+		t.Errorf("output file should not exist (no messages have [NotUsed]), but got:\n%s", string(content))
+	}
+}
+
+// T008: Annotated message + dependencies kept, golden file comparison
+func TestIncludeAnnotatedMessageCLI(t *testing.T) {
+	bin := buildBinary(t)
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"PublishedApi\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", testdataDir(t, "messages"),
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	// Compare output against golden file
+	actual, err := os.ReadFile(filepath.Join(outDir, "messages_annotated.proto"))
+	if err != nil {
+		t.Fatalf("output file missing: %v", err)
+	}
+	expected, err := os.ReadFile(filepath.Join(testdataDir(t, "messages"), "expected", "messages_annotated.proto"))
+	if err != nil {
+		t.Fatalf("golden file missing: %v", err)
+	}
+	if string(actual) != string(expected) {
+		t.Errorf("output does not match golden file\n--- ACTUAL ---\n%s\n--- EXPECTED ---\n%s", string(actual), string(expected))
+	}
+}
+
+// T009: Mixed services + messages, unreferenced unannotated message removed
+func TestIncludeMessageMixedCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package mixed;
+
+// [PublicApi]
+service OrderService {
+  // [PublicApi]
+  rpc GetOrder(GetOrderRequest) returns (GetOrderResponse);
+}
+
+message GetOrderRequest {
+  uint64 id = 1;
+}
+
+message GetOrderResponse {
+  string name = 1;
+}
+
+message AuditLog {
+  string data = 1;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "service.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"PublicApi\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outData, err := os.ReadFile(filepath.Join(outDir, "service.proto"))
+	if err != nil {
+		t.Fatalf("output file missing: %v", err)
+	}
+	output := string(outData)
+
+	// OrderService and its dependencies should be kept
+	if !strings.Contains(output, "OrderService") {
+		t.Errorf("output should contain OrderService, got:\n%s", output)
+	}
+	if !strings.Contains(output, "GetOrderRequest") {
+		t.Errorf("output should contain GetOrderRequest (service dep), got:\n%s", output)
+	}
+	if !strings.Contains(output, "GetOrderResponse") {
+		t.Errorf("output should contain GetOrderResponse (service dep), got:\n%s", output)
+	}
+	// AuditLog should be removed (unannotated, unreferenced)
+	if strings.Contains(output, "AuditLog") {
+		t.Errorf("output should NOT contain AuditLog (unannotated, unreferenced), got:\n%s", output)
+	}
+}
+
+// T010: Combined include + exclude with message field removal
+func TestIncludeExcludeMessageCLI(t *testing.T) {
+	bin := buildBinary(t)
+	inputDir := t.TempDir()
+	outDir := t.TempDir()
+	cfgDir := t.TempDir()
+
+	protoContent := `syntax = "proto3";
+package combmsg;
+
+// [PublishedApi]
+message Parameters {
+  string name = 1;
+  // [Deprecated]
+  string old_field = 2;
+  uint64 value = 3;
+}
+`
+	os.WriteFile(filepath.Join(inputDir, "messages.proto"), []byte(protoContent), 0o644)
+
+	cfgPath := filepath.Join(cfgDir, "filter.yaml")
+	os.WriteFile(cfgPath, []byte("annotations:\n  include:\n    - \"PublishedApi\"\n  exclude:\n    - \"Deprecated\"\n"), 0o644)
+
+	stderr, code := runBinary(t, bin,
+		"--input", inputDir,
+		"--output", outDir,
+		"--config", cfgPath,
+	)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d; stderr: %s", code, stderr)
+	}
+
+	outData, err := os.ReadFile(filepath.Join(outDir, "messages.proto"))
+	if err != nil {
+		t.Fatalf("output file missing: %v", err)
+	}
+	output := string(outData)
+
+	// Parameters should be kept (has [PublishedApi])
+	if !strings.Contains(output, "Parameters") {
+		t.Errorf("output should contain Parameters, got:\n%s", output)
+	}
+	// old_field should be removed (has [Deprecated])
+	if strings.Contains(output, "old_field") {
+		t.Errorf("output should NOT contain deprecated field 'old_field', got:\n%s", output)
+	}
+	// name and value should remain
+	if !strings.Contains(output, "name") {
+		t.Errorf("output should contain 'name' field, got:\n%s", output)
+	}
+	if !strings.Contains(output, "value") {
+		t.Errorf("output should contain 'value' field, got:\n%s", output)
+	}
+	// [PublishedApi] annotation should be stripped
+	if strings.Contains(output, "PublishedApi") {
+		t.Errorf("output should NOT contain PublishedApi annotation (should be stripped), got:\n%s", output)
+	}
+}
