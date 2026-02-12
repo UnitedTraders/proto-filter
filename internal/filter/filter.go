@@ -339,6 +339,165 @@ func IncludeMethodsByAnnotation(def *proto.Proto, annotations []string) int {
 	return removed
 }
 
+// CollectIncludeMessageRoots returns the FQNs of messages and enums that
+// have a matching include annotation. These can be passed to
+// RemoveOrphanedDefinitions as pinned roots to prevent them from being
+// removed as orphans.
+func CollectIncludeMessageRoots(def *proto.Proto, annotations []string) map[string]bool {
+	if len(annotations) == 0 {
+		return nil
+	}
+	annotSet := make(map[string]bool, len(annotations))
+	for _, a := range annotations {
+		annotSet[a] = true
+	}
+
+	pkg := ""
+	for _, elem := range def.Elements {
+		if p, ok := elem.(*proto.Package); ok {
+			pkg = p.Name
+			break
+		}
+	}
+
+	roots := make(map[string]bool)
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Message:
+			for _, a := range ExtractAnnotations(v.Comment) {
+				if annotSet[a] {
+					roots[qualifiedName(pkg, v.Name)] = true
+					break
+				}
+			}
+		case *proto.Enum:
+			for _, a := range ExtractAnnotations(v.Comment) {
+				if annotSet[a] {
+					roots[qualifiedName(pkg, v.Name)] = true
+					break
+				}
+			}
+		}
+	}
+	return roots
+}
+
+// IncludeMessagesByAnnotation removes top-level messages and enums from the
+// proto AST whose comments do NOT contain any of the specified include
+// annotations and are not referenced (directly or transitively) by an
+// annotated message. Non-message/non-enum elements pass through unchanged.
+// Returns the number of removed messages/enums.
+func IncludeMessagesByAnnotation(def *proto.Proto, annotations []string) int {
+	if len(annotations) == 0 {
+		return 0
+	}
+	annotSet := make(map[string]bool, len(annotations))
+	for _, a := range annotations {
+		annotSet[a] = true
+	}
+
+	// Extract package name for qualified name resolution
+	pkg := ""
+	for _, elem := range def.Elements {
+		if p, ok := elem.(*proto.Package); ok {
+			pkg = p.Name
+			break
+		}
+	}
+
+	// Phase 1: Identify annotated messages/enums as roots, and collect
+	// all types referenced by remaining services (services are not filtered here)
+	roots := make(map[string]bool)
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Message:
+			annots := ExtractAnnotations(v.Comment)
+			for _, a := range annots {
+				if annotSet[a] {
+					roots[qualifiedName(pkg, v.Name)] = true
+					break
+				}
+			}
+		case *proto.Enum:
+			annots := ExtractAnnotations(v.Comment)
+			for _, a := range annots {
+				if annotSet[a] {
+					roots[qualifiedName(pkg, v.Name)] = true
+					break
+				}
+			}
+		case *proto.Service:
+			// Services are kept/removed by IncludeServicesByAnnotation.
+			// Any service still in the AST is kept — collect its references.
+			for _, svcElem := range v.Elements {
+				if rpc, ok := svcElem.(*proto.RPC); ok {
+					if rpc.RequestType != "" {
+						roots[qualifiedName(pkg, rpc.RequestType)] = true
+					}
+					if rpc.ReturnsType != "" {
+						roots[qualifiedName(pkg, rpc.ReturnsType)] = true
+					}
+				}
+			}
+		}
+	}
+
+	// Phase 2: Collect transitive dependencies of roots
+	keep := make(map[string]bool)
+	for fqn := range roots {
+		keep[fqn] = true
+	}
+
+	// Iteratively collect references from kept messages
+	for {
+		refs := make(map[string]bool)
+		for _, elem := range def.Elements {
+			if msg, ok := elem.(*proto.Message); ok {
+				fqn := qualifiedName(pkg, msg.Name)
+				if keep[fqn] {
+					collectMessageRefs(refs, pkg, msg)
+				}
+			}
+		}
+		added := false
+		for ref := range refs {
+			if !keep[ref] {
+				keep[ref] = true
+				added = true
+			}
+		}
+		if !added {
+			break
+		}
+	}
+
+	// Phase 3: Remove messages/enums not in the keep set
+	filtered := make([]proto.Visitee, 0, len(def.Elements))
+	removed := 0
+	for _, elem := range def.Elements {
+		switch v := elem.(type) {
+		case *proto.Message:
+			fqn := qualifiedName(pkg, v.Name)
+			if keep[fqn] {
+				filtered = append(filtered, elem)
+			} else {
+				removed++
+			}
+		case *proto.Enum:
+			fqn := qualifiedName(pkg, v.Name)
+			if keep[fqn] {
+				filtered = append(filtered, elem)
+			} else {
+				removed++
+			}
+		default:
+			filtered = append(filtered, elem)
+		}
+	}
+	def.Elements = filtered
+	return removed
+}
+
 // FilterFieldsByAnnotation removes individual message fields from the proto
 // AST whose comments contain any of the specified annotations. Handles
 // NormalField, MapField, and OneOfField (within Oneof containers). Also
@@ -519,11 +678,19 @@ func isUserType(typeName string) bool {
 
 // RemoveOrphanedDefinitions iteratively removes messages and enums
 // that are no longer referenced by any remaining RPC method or message.
+// Optional pinned FQNs are always kept (treated as roots).
 // Returns the total count of removed definitions.
-func RemoveOrphanedDefinitions(def *proto.Proto, pkg string) int {
+func RemoveOrphanedDefinitions(def *proto.Proto, pkg string, pinned ...map[string]bool) int {
+	var pinnedSet map[string]bool
+	if len(pinned) > 0 {
+		pinnedSet = pinned[0]
+	}
 	totalRemoved := 0
 	for {
 		refs := CollectReferencedTypes(def, pkg)
+		for fqn := range pinnedSet {
+			refs[fqn] = true
+		}
 
 		filtered := make([]proto.Visitee, 0, len(def.Elements))
 		removed := 0

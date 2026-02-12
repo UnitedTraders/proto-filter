@@ -26,9 +26,9 @@ tests/
 Go 1.23+: Follow standard conventions
 
 ## Recent Changes
+- 013-message-include-filter: Added Go 1.25+ + `github.com/emicklei/proto` v1.14.3, `gopkg.in/yaml.v3`
 - 012-fix-include-unannotated: Added Go 1.25+ + `github.com/emicklei/proto` v1.14.3, `gopkg.in/yaml.v3`
 - 011-combined-include-exclude: Added Go 1.25+ (existing project) + `github.com/emicklei/proto` v1.14.3, `github.com/emicklei/proto-contrib` v0.18.3, `gopkg.in/yaml.v3`
-- 010-substitution-placeholders: Added Go 1.25+ + `github.com/emicklei/proto` v1.14.3, `gopkg.in/yaml.v3`
 
 
 <!-- MANUAL ADDITIONS START -->
